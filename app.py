@@ -22,6 +22,11 @@ app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # 5MB max upload
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
 TIMEZONE_KOLKATA = zoneinfo.ZoneInfo("Asia/Kolkata")
 
+# Primary and fallback Gemini models
+# Primary model: "gemini-2.5-flash", fallback: "gemini-3.5-flash-lite"
+MODELS_TO_TRY = ["gemini-2.5-flash", "gemini-3.5-flash-lite"]
+BACKOFF_DELAYS = [2, 4, 8, 16]
+
 # In-memory cache for extraction results by SHA-256 image hash
 EXTRACTION_CACHE = {}
 
@@ -33,6 +38,8 @@ CURRENT_RETRY_STATUS = ""
 SAMPLE_MOCKS = {
     "timetable": {
         "doc_type": "timetable",
+        "model_used": "gemini-2.5-flash",
+        "model": "gemini-2.5-flash",
         "language": "English",
         "confidence": 0.98,
         "field_confidence": {
@@ -79,6 +86,8 @@ SAMPLE_MOCKS = {
     },
     "receipt": {
         "doc_type": "receipt",
+        "model_used": "gemini-2.5-flash",
+        "model": "gemini-2.5-flash",
         "language": "English",
         "confidence": 0.97,
         "field_confidence": {
@@ -106,6 +115,8 @@ SAMPLE_MOCKS = {
     },
     "notice": {
         "doc_type": "notice",
+        "model_used": "gemini-2.5-flash",
+        "model": "gemini-2.5-flash",
         "language": "English",
         "confidence": 0.96,
         "field_confidence": {
@@ -223,22 +234,66 @@ def clean_json_text(text):
         text = text[:-3]
     return text.strip()
 
+def is_daily_quota_error(err):
+    """
+    Checks if a 429 error mentions daily quota exhaustion, e.g.
+    'daily free-tier quota', 'requests per day', 'PerDay', etc.
+    """
+    err_str = str(err).lower()
+    code = getattr(err, 'code', None) or getattr(err, 'status_code', None)
+    is_quota_issue = (code == 429) or ("429" in err_str) or ("resource_exhausted" in err_str) or ("quota" in err_str)
+    if not is_quota_issue:
+        return False
+    daily_keywords = [
+        "daily",
+        "per day",
+        "perday",
+        "per_day",
+        "day limit",
+        "day_limit",
+        "requests per day",
+        "free-tier quota",
+        "free tier quota",
+        "free_tier",
+        "day"
+    ]
+    if any(k in err_str for k in daily_keywords):
+        return True
+    return False
+
 def is_retryable_error(err):
     """
-    Checks if an API error is a retryable 503, 429, or timeout error.
+    Checks if an API error is retryable with backoff:
+    Only retries on 503 and short per-minute 429s.
+    Daily quota 429s are NOT retryable.
+    404 NOT_FOUND errors are NOT retryable.
     """
+    # On a 404 for any model, skip to the next fallback instead of retrying
     code = getattr(err, 'code', None) or getattr(err, 'status_code', None)
-    if code in (429, 503, 504):
-        return True
+    if code == 404:
+        return False
+
     err_str = str(err).lower()
+    if "404" in err_str or "not_found" in err_str or "not found" in err_str or "no longer available" in err_str:
+        return False
+
+    # Requirement 2: On a 429 that mentions daily quota, do NOT retry
+    if is_daily_quota_error(err):
+        return False
+
+    if code in (503, 504):
+        return True
+    if code == 429:
+        return True
+
     if "503" in err_str or "unavailable" in err_str:
         return True
-    if "429" in err_str or "resource_exhausted" in err_str or "rate limit" in err_str or "quota" in err_str or "too many requests" in err_str:
+    if "timeout" in err_str or "timed out" in err_str or "deadline" in err_str or "504" in err_str or isinstance(err, (TimeoutError,)):
         return True
-    if "timeout" in err_str or "timed out" in err_str or "deadline" in err_str or "504" in err_str:
+    # Short per-minute 429s or generic rate limits
+    if "429" in err_str or "resource_exhausted" in err_str or "rate limit" in err_str or "too many requests" in err_str:
         return True
-    if isinstance(err, (TimeoutError,)):
-        return True
+
     return False
 
 def generate_docsnap_ics(doc_type, data):
@@ -414,18 +469,99 @@ def generate_docsnap_ics(doc_type, data):
 
 @app.route('/')
 def index():
-    """Serves the DocSnap web interface with retry status polling."""
+    """Serves the DocSnap web interface with retry status polling and dynamic model badge update."""
     rendered = render_template('index.html')
     status_script = """
 <script>
 (function() {
   const defaultSubtitle = "Performing one-shot OCR, classification, and schema extraction...";
+  
+  function formatModelName(name) {
+    if (!name) return "Gemini 2.5 Flash";
+    const lower = name.toLowerCase();
+    if (lower.includes("3.5") && lower.includes("lite")) return "Gemini 3.5 Flash Lite";
+    if (lower.includes("2.5") && lower.includes("lite")) return "Gemini 2.5 Flash Lite";
+    if (lower.includes("lite")) return "Gemini 3.5 Flash Lite";
+    if (lower.includes("2.5") && lower.includes("flash")) return "Gemini 2.5 Flash";
+    if (lower.includes("3.8") && lower.includes("flash")) return "Gemini 3.8 Flash";
+    return name;
+  }
+
+  function updateModelBadges(modelName) {
+    const formatted = formatModelName(modelName);
+    
+    // 1. Update top navbar model badge
+    const navBadgeText = document.querySelector('.model-badge .badge-text');
+    if (navBadgeText) {
+      navBadgeText.textContent = formatted;
+    }
+    const navBadge = document.querySelector('.model-badge');
+    if (navBadge) {
+      navBadge.title = 'Powered by Google ' + formatted + ' Vision OCR';
+    }
+    
+    // 2. Update or insert model badge in results metadata header (.badge-group)
+    let resModelBadge = document.getElementById('badge-model-used');
+    if (!resModelBadge) {
+      const badgeGroup = document.querySelector('.meta-badges-row .badge-group');
+      if (badgeGroup) {
+        resModelBadge = document.createElement('span');
+        resModelBadge.id = 'badge-model-used';
+        resModelBadge.className = 'badge badge-outline';
+        badgeGroup.appendChild(resModelBadge);
+      }
+    }
+    if (resModelBadge) {
+      resModelBadge.textContent = formatted;
+      resModelBadge.title = 'Active Model: ' + formatted;
+    }
+  }
+
+  // Intercept fetch to capture the real model used from /extract response
+  const originalFetch = window.fetch;
+  window.fetch = async function(...args) {
+    const response = await originalFetch.apply(this, args);
+    try {
+      const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url);
+      if (url && url.includes('/extract') && !url.includes('/extract/status')) {
+        const clone = response.clone();
+        clone.json().then(data => {
+          if (data && (data.model_used || data.model)) {
+            const m = data.model_used || data.model;
+            sessionStorage.setItem('docsnap_model_used', m);
+            updateModelBadges(m);
+          }
+        }).catch(() => {});
+      }
+    } catch (e) {}
+    return response;
+  };
+
+  // Restore stored model badge on load
+  const storedModel = sessionStorage.getItem('docsnap_model_used');
+  if (storedModel) {
+    updateModelBadges(storedModel);
+  }
+
+  // Watch for results view rendering so badge is always injected in results metadata
+  const observer = new MutationObserver(() => {
+    const stored = sessionStorage.getItem('docsnap_model_used');
+    if (stored) {
+      const badgeGroup = document.querySelector('.meta-badges-row .badge-group');
+      if (badgeGroup && !document.getElementById('badge-model-used')) {
+        updateModelBadges(stored);
+      }
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  // Retry status poller for processing screen
   setInterval(async () => {
     try {
       const procScreen = document.getElementById('screen-processing');
       const sub = document.querySelector('.processing-subtitle');
       if (procScreen && !procScreen.classList.contains('hidden')) {
-        const res = await fetch('/extract/status');
+        const res = await originalFetch('/extract/status');
         if (res.ok) {
           const data = await res.json();
           if (sub && data.status) {
@@ -457,7 +593,7 @@ def serve_sample(filename):
 @app.route('/extract', methods=['POST'])
 def extract_document():
     """
-    Accepts an uploaded image, sends it to Gemini AI (gemini-2.5-flash with fallback to gemini-2.5-flash-lite),
+    Accepts an uploaded image, sends it to Gemini AI (gemini-2.5-flash with fallback to gemini-3.5-flash-lite),
     and returns detected doc_type and structured JSON data.
     Retries up to 4 times on 503, 429, and timeouts with exponential backoff (2s, 4s, 8s, 16s).
     Shows retry status in UI, resizes images > 2000px, and caches results by image hash.
@@ -549,6 +685,8 @@ def extract_document():
             mock = dict(SAMPLE_MOCKS["timetable"])
             mock["_demo_mode"] = True
             mock["_note"] = "Extracted using DocSnap sample demo mode. To process custom images with live AI, add GEMINI_API_KEY in .env."
+            mock["model_used"] = "gemini-2.5-flash"
+            mock["model"] = "gemini-2.5-flash"
             EXTRACTION_CACHE[raw_image_hash] = mock
             EXTRACTION_CACHE[resized_image_hash] = mock
             return jsonify(mock)
@@ -556,6 +694,8 @@ def extract_document():
             mock = dict(SAMPLE_MOCKS["receipt"])
             mock["_demo_mode"] = True
             mock["_note"] = "Extracted using DocSnap sample demo mode. To process custom images with live AI, add GEMINI_API_KEY in .env."
+            mock["model_used"] = "gemini-2.5-flash"
+            mock["model"] = "gemini-2.5-flash"
             EXTRACTION_CACHE[raw_image_hash] = mock
             EXTRACTION_CACHE[resized_image_hash] = mock
             return jsonify(mock)
@@ -563,6 +703,8 @@ def extract_document():
             mock = dict(SAMPLE_MOCKS["notice"])
             mock["_demo_mode"] = True
             mock["_note"] = "Extracted using DocSnap sample demo mode. To process custom images with live AI, add GEMINI_API_KEY in .env."
+            mock["model_used"] = "gemini-2.5-flash"
+            mock["model"] = "gemini-2.5-flash"
             EXTRACTION_CACHE[raw_image_hash] = mock
             EXTRACTION_CACHE[resized_image_hash] = mock
             return jsonify(mock)
@@ -572,8 +714,8 @@ def extract_document():
             }), 400
     
     # 3. Gemini retry and fallback strategy
-    # Try gemini-2.5-flash first; if it still fails, fall back to gemini-2.5-flash-lite (with gemini-3.8-flash safeguard)
-    MODELS_TO_TRY = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.8-flash"]
+    # Primary model: "gemini-2.5-flash", fallback: "gemini-3.5-flash-lite"
+    MODELS_TO_TRY = ["gemini-2.5-flash", "gemini-3.5-flash-lite"]
     BACKOFF_DELAYS = [2, 4, 8, 16]
     
     try:
@@ -613,6 +755,8 @@ def extract_document():
                     
                     try:
                         result_json = json.loads(cleaned)
+                        result_json["model_used"] = model_name
+                        result_json["model"] = model_name
                         CURRENT_RETRY_STATUS = ""
                         break
                     except json.JSONDecodeError as je:
@@ -623,13 +767,19 @@ def extract_document():
                 except Exception as api_err:
                     last_error = str(api_err)
                     err_str = str(api_err).lower()
+                    err_code = getattr(api_err, 'code', None) or getattr(api_err, 'status_code', None)
                     
-                    # If model not found (404) or deprecated, immediately switch to next model without delay
-                    if "404" in err_str or "not_found" in err_str or "no longer available" in err_str:
+                    # On a 404 for any model, skip to the next fallback instead of retrying
+                    if err_code == 404 or "404" in err_str or "not_found" in err_str or "not found" in err_str or "no longer available" in err_str:
                         CURRENT_RETRY_STATUS = ""
                         break
                         
-                    # Retry up to 4 times on 503, 429, and timeouts
+                    # Requirement 2: On a 429 that mentions daily quota, do NOT retry the same model. Switch to fallback immediately.
+                    if is_daily_quota_error(api_err):
+                        CURRENT_RETRY_STATUS = ""
+                        break
+                        
+                    # Requirement 3: Only retry (with backoff) on 503 and short per-minute 429s
                     if is_retryable_error(api_err):
                         if attempt < len(BACKOFF_DELAYS):
                             continue
@@ -651,6 +801,8 @@ def extract_document():
                 mock = dict(SAMPLE_MOCKS["timetable"])
                 mock["_demo_mode"] = True
                 mock["_note"] = "Gemini quota reached. Loaded sample timetable."
+                mock["model_used"] = "gemini-2.5-flash"
+                mock["model"] = "gemini-2.5-flash"
                 EXTRACTION_CACHE[raw_image_hash] = mock
                 EXTRACTION_CACHE[resized_image_hash] = mock
                 return jsonify(mock)
@@ -658,6 +810,8 @@ def extract_document():
                 mock = dict(SAMPLE_MOCKS["receipt"])
                 mock["_demo_mode"] = True
                 mock["_note"] = "Gemini quota reached. Loaded sample receipt."
+                mock["model_used"] = "gemini-2.5-flash"
+                mock["model"] = "gemini-2.5-flash"
                 EXTRACTION_CACHE[raw_image_hash] = mock
                 EXTRACTION_CACHE[resized_image_hash] = mock
                 return jsonify(mock)
@@ -665,6 +819,8 @@ def extract_document():
                 mock = dict(SAMPLE_MOCKS["notice"])
                 mock["_demo_mode"] = True
                 mock["_note"] = "Gemini quota reached. Loaded sample notice."
+                mock["model_used"] = "gemini-2.5-flash"
+                mock["model"] = "gemini-2.5-flash"
                 EXTRACTION_CACHE[raw_image_hash] = mock
                 EXTRACTION_CACHE[resized_image_hash] = mock
                 return jsonify(mock)
@@ -686,6 +842,8 @@ def extract_document():
             }), 422
             
         # Cache successful extraction by image hash
+        result_json["model_used"] = result_json.get("model_used") or model_name
+        result_json["model"] = result_json.get("model") or model_name
         EXTRACTION_CACHE[raw_image_hash] = result_json
         EXTRACTION_CACHE[resized_image_hash] = result_json
         
