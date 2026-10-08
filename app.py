@@ -8,13 +8,18 @@ import datetime
 import zoneinfo
 import hashlib
 import uuid
+import base64
 from pathlib import Path
 from flask import Flask, request, jsonify, render_template, Response, send_from_directory
 from dotenv import load_dotenv
+load_dotenv()
 from PIL import Image, ImageOps
 
-# Load environment variables from .env file
-load_dotenv()
+# Modular DocSnap services
+import database
+import verification
+import sensitive_data
+import ai_services
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # 5MB max upload
@@ -23,8 +28,8 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
 TIMEZONE_KOLKATA = zoneinfo.ZoneInfo("Asia/Kolkata")
 
 # Primary and fallback Gemini models
-# Primary model: "gemini-2.5-flash", fallback: "gemini-3.5-flash-lite"
-MODELS_TO_TRY = ["gemini-2.5-flash", "gemini-3.5-flash-lite"]
+# Primary: "gemini-3.5-flash", fallbacks: "gemini-3.5-flash-lite", "gemini-3.8-flash"
+MODELS_TO_TRY = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"]
 BACKOFF_DELAYS = [2, 4, 8, 16]
 
 # In-memory cache for extraction results by SHA-256 image hash
@@ -33,13 +38,12 @@ EXTRACTION_CACHE = {}
 # Current status for UI retry notifications
 CURRENT_RETRY_STATUS = ""
 
-
 # Predefined curated mock responses for built-in sample images for instant demo testing
 SAMPLE_MOCKS = {
     "timetable": {
         "doc_type": "timetable",
-        "model_used": "gemini-2.5-flash",
-        "model": "gemini-2.5-flash",
+        "model_used": "gemini-3.8-flash",
+        "model": "gemini-3.8-flash",
         "language": "English",
         "confidence": 0.98,
         "field_confidence": {
@@ -86,8 +90,8 @@ SAMPLE_MOCKS = {
     },
     "receipt": {
         "doc_type": "receipt",
-        "model_used": "gemini-2.5-flash",
-        "model": "gemini-2.5-flash",
+        "model_used": "gemini-3.8-flash",
+        "model": "gemini-3.8-flash",
         "language": "English",
         "confidence": 0.97,
         "field_confidence": {
@@ -115,8 +119,8 @@ SAMPLE_MOCKS = {
     },
     "notice": {
         "doc_type": "notice",
-        "model_used": "gemini-2.5-flash",
-        "model": "gemini-2.5-flash",
+        "model_used": "gemini-3.8-flash",
+        "model": "gemini-3.8-flash",
         "language": "English",
         "confidence": 0.96,
         "field_confidence": {
@@ -138,7 +142,7 @@ SAMPLE_MOCKS = {
     }
 }
 
-# Pre-cache built-in samples by image hash so demo testing is instant and reliable
+# Pre-cache built-in samples by image hash
 try:
     for _sk, _sf in [('timetable', 'sample_timetable.png'), ('receipt', 'sample_receipt.png'), ('notice', 'sample_notice.png')]:
         _sp = Path(__file__).parent / 'static' / 'samples' / _sf
@@ -159,7 +163,7 @@ Follow these strict output constraints:
 1. Output MUST be ONLY valid JSON. Do not include markdown code fences, backticks (```), commentary, or explanations.
 2. Structure:
 {
-  "doc_type": "timetable" | "receipt" | "notice" | "unknown",
+  "doc_type": "timetable" | "receipt" | "notice" | "poster" | "other",
   "language": "detected language(s)",
   "confidence": 0.0 to 1.0,
   "field_confidence": {
@@ -200,7 +204,7 @@ Document Schemas:
     "category": "Food & Dining | Groceries | Shopping | Utilities | Travel | Electronics | Other"
   }
 
-- If doc_type is "notice":
+- If doc_type is "notice" or "poster":
   "data": {
     "title": "Notice/Event headline",
     "date": "YYYY-MM-DD" or null,
@@ -210,12 +214,21 @@ Document Schemas:
     "description": "Concise summary of event/notice details"
   }
 
+- If doc_type is "other":
+  "data": {
+    "title": "Document Title or null",
+    "summary": "Summary of document",
+    "key_fields": {
+      "field_name": "field_value"
+    }
+  }
+
 CRITICAL RULES:
 - Never hallucinate or invent values. Use null for any details not clearly visible.
 - Support English, Hindi (हिंदी), and Gujarati (ગુજરાતી) text accurately.
 - DO NOT TRANSLATE; preserve the original text and spelling exactly as seen in the image.
 - Provide a confidence score between 0.0 and 1.0 for each extracted field in "field_confidence".
-- If the image is not a timetable, receipt, or notice, set "doc_type" to "unknown" and "data" to null.
+- If the image is not a recognized document, set "doc_type" to "other" and extract what text is visible.
 """
 
 def allowed_file(filename):
@@ -235,75 +248,46 @@ def clean_json_text(text):
     return text.strip()
 
 def is_daily_quota_error(err):
-    """
-    Checks if a 429 error mentions daily quota exhaustion, e.g.
-    'daily free-tier quota', 'requests per day', 'PerDay', etc.
-    """
     err_str = str(err).lower()
     code = getattr(err, 'code', None) or getattr(err, 'status_code', None)
     is_quota_issue = (code == 429) or ("429" in err_str) or ("resource_exhausted" in err_str) or ("quota" in err_str)
     if not is_quota_issue:
         return False
-    daily_keywords = [
-        "daily",
-        "per day",
-        "perday",
-        "per_day",
-        "day limit",
-        "day_limit",
-        "requests per day",
-        "free-tier quota",
-        "free tier quota",
-        "free_tier",
-        "day"
-    ]
-    if any(k in err_str for k in daily_keywords):
-        return True
-    return False
+    daily_keywords = ["daily", "per day", "perday", "per_day", "day limit", "requests per day", "free-tier quota", "free tier", "day"]
+    return any(k in err_str for k in daily_keywords)
 
 def is_retryable_error(err):
-    """
-    Checks if an API error is retryable with backoff:
-    Only retries on 503 and short per-minute 429s.
-    Daily quota 429s are NOT retryable.
-    404 NOT_FOUND errors are NOT retryable.
-    """
-    # On a 404 for any model, skip to the next fallback instead of retrying
     code = getattr(err, 'code', None) or getattr(err, 'status_code', None)
     if code == 404:
         return False
-
     err_str = str(err).lower()
     if "404" in err_str or "not_found" in err_str or "not found" in err_str or "no longer available" in err_str:
         return False
-
-    # Requirement 2: On a 429 that mentions daily quota, do NOT retry
     if is_daily_quota_error(err):
         return False
-
-    if code in (503, 504):
+    if code in (503, 504) or code == 429:
         return True
-    if code == 429:
+    if "503" in err_str or "unavailable" in err_str or "timeout" in err_str or "deadline" in err_str or "429" in err_str or "resource_exhausted" in err_str:
         return True
-
-    if "503" in err_str or "unavailable" in err_str:
-        return True
-    if "timeout" in err_str or "timed out" in err_str or "deadline" in err_str or "504" in err_str or isinstance(err, (TimeoutError,)):
-        return True
-    # Short per-minute 429s or generic rate limits
-    if "429" in err_str or "resource_exhausted" in err_str or "rate limit" in err_str or "too many requests" in err_str:
-        return True
-
     return False
+
+def generate_thumbnail_base64(pil_img, max_size=(240, 240)):
+    """Generates an embedded JPEG thumbnail data URL."""
+    try:
+        thumb = pil_img.copy()
+        thumb.thumbnail(max_size, Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        if thumb.mode in ('RGBA', 'LA', 'P'):
+            thumb = thumb.convert('RGB')
+        thumb.save(buf, format='JPEG', quality=80)
+        b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+        return f"data:image/jpeg;base64,{b64}"
+    except Exception:
+        return ""
 
 def generate_docsnap_ics(doc_type, data):
     """
-    Generates an RFC 5545 compliant .ics calendar string with:
-    - DTSTAMP on every VEVENT
-    - CRLF (\\r\\n) line endings
-    - TZID=Asia/Kolkata with a standard VTIMEZONE block
-    - X-WR-CALNAME:DocSnap Timetable
-    - For recurring timetable classes, starts on the next upcoming occurrence of each weekday.
+    Generates an RFC 5545 compliant .ics calendar string in timezone Asia/Kolkata.
     """
     now = datetime.datetime.now(TIMEZONE_KOLKATA)
     now_utc = datetime.datetime.now(datetime.timezone.utc)
@@ -333,21 +317,12 @@ def generate_docsnap_ics(doc_type, data):
     def escape_ics(text):
         if not text:
             return ""
-        s = str(text)
-        s = s.replace('\\', '\\\\')
-        s = s.replace(';', '\\;')
-        s = s.replace(',', '\\,')
-        s = s.replace('\r\n', '\\n').replace('\r', '\\n').replace('\n', '\\n')
-        return s
+        s = str(text).replace('\\', '\\\\').replace(';', '\\;').replace(',', '\\,')
+        return s.replace('\r\n', '\\n').replace('\r', '\\n').replace('\n', '\\n')
     
     weekday_map = {
-        'monday': 0, 'mon': 0,
-        'tuesday': 1, 'tue': 1,
-        'wednesday': 2, 'wed': 2,
-        'thursday': 3, 'thu': 3,
-        'friday': 4, 'fri': 4,
-        'saturday': 5, 'sat': 5,
-        'sunday': 6, 'sun': 6
+        'monday': 0, 'mon': 0, 'tuesday': 1, 'tue': 1, 'wednesday': 2, 'wed': 2,
+        'thursday': 3, 'thu': 3, 'friday': 4, 'fri': 4, 'saturday': 5, 'sat': 5, 'sunday': 6, 'sun': 6
     }
     
     if doc_type == 'timetable':
@@ -380,7 +355,6 @@ def generate_docsnap_ics(doc_type, data):
             base_date = now.date() + datetime.timedelta(days=days_ahead)
             start_dt = datetime.datetime(base_date.year, base_date.month, base_date.day, sh, sm, tzinfo=TIMEZONE_KOLKATA)
             
-            # Start on the next upcoming occurrence of its weekday
             if days_ahead == 0 and start_dt <= now:
                 start_dt += datetime.timedelta(days=7)
                 
@@ -393,10 +367,8 @@ def generate_docsnap_ics(doc_type, data):
             
             summary = f"{subject} ({room})" if room else subject
             desc_items = []
-            if faculty:
-                desc_items.append(f"Faculty: {faculty}")
-            if room:
-                desc_items.append(f"Room: {room}")
+            if faculty: desc_items.append(f"Faculty: {faculty}")
+            if room: desc_items.append(f"Room: {room}")
             description = " | ".join(desc_items)
             
             event_uid = f"timetable-{idx}-{int(start_dt.timestamp())}-{uuid.uuid4().hex[:8]}@docsnap"
@@ -405,16 +377,14 @@ def generate_docsnap_ics(doc_type, data):
             lines.append(f"UID:{event_uid}")
             lines.append(f"DTSTAMP:{dtstamp}")
             lines.append(f"SUMMARY:{escape_ics(summary)}")
-            if description:
-                lines.append(f"DESCRIPTION:{escape_ics(description)}")
-            if room:
-                lines.append(f"LOCATION:{escape_ics(room)}")
+            if description: lines.append(f"DESCRIPTION:{escape_ics(description)}")
+            if room: lines.append(f"LOCATION:{escape_ics(room)}")
             lines.append(f"DTSTART;TZID=Asia/Kolkata:{dtstart_val}")
             lines.append(f"DTEND;TZID=Asia/Kolkata:{dtend_val}")
             lines.append("RRULE:FREQ=WEEKLY")
             lines.append("END:VEVENT")
             
-    elif doc_type == 'notice':
+    elif doc_type in ('notice', 'poster'):
         title = data.get('title') or "Notice Event"
         date_str = str(data.get('date', '')).strip()
         start_str = str(data.get('start_time', '')).strip()
@@ -451,10 +421,8 @@ def generate_docsnap_ics(doc_type, data):
         lines.append(f"UID:{event_uid}")
         lines.append(f"DTSTAMP:{dtstamp}")
         lines.append(f"SUMMARY:{escape_ics(title)}")
-        if description:
-            lines.append(f"DESCRIPTION:{escape_ics(description)}")
-        if venue:
-            lines.append(f"LOCATION:{escape_ics(venue)}")
+        if description: lines.append(f"DESCRIPTION:{escape_ics(description)}")
+        if venue: lines.append(f"LOCATION:{escape_ics(venue)}")
         lines.append(f"DTSTART;TZID=Asia/Kolkata:{dtstart_val}")
         lines.append(f"DTEND;TZID=Asia/Kolkata:{dtend_val}")
         lines.append("END:VEVENT")
@@ -462,10 +430,11 @@ def generate_docsnap_ics(doc_type, data):
         return None, f"Export to ICS is not supported for document type '{doc_type}'."
         
     lines.append("END:VCALENDAR")
-    
-    # Strictly join with CRLF line endings
-    ics_text = "\r\n".join(lines) + "\r\n"
-    return ics_text, None
+    return "\r\n".join(lines) + "\r\n", None
+
+# ==============================================================================
+# ROUTES
+# ==============================================================================
 
 @app.route('/')
 def index():
@@ -477,30 +446,21 @@ def index():
   const defaultSubtitle = "Performing one-shot OCR, classification, and schema extraction...";
   
   function formatModelName(name) {
-    if (!name) return "Gemini 2.5 Flash";
+    if (!name) return "Gemini 3.8 Flash";
     const lower = name.toLowerCase();
-    if (lower.includes("3.5") && lower.includes("lite")) return "Gemini 3.5 Flash Lite";
-    if (lower.includes("2.5") && lower.includes("lite")) return "Gemini 2.5 Flash Lite";
-    if (lower.includes("lite")) return "Gemini 3.5 Flash Lite";
-    if (lower.includes("2.5") && lower.includes("flash")) return "Gemini 2.5 Flash";
     if (lower.includes("3.8") && lower.includes("flash")) return "Gemini 3.8 Flash";
+    if (lower.includes("3.5") && lower.includes("lite")) return "Gemini 3.5 Flash Lite";
+    if (lower.includes("2.5") && lower.includes("flash")) return "Gemini 2.5 Flash";
     return name;
   }
 
   function updateModelBadges(modelName) {
     const formatted = formatModelName(modelName);
-    
-    // 1. Update top navbar model badge
     const navBadgeText = document.querySelector('.model-badge .badge-text');
-    if (navBadgeText) {
-      navBadgeText.textContent = formatted;
-    }
+    if (navBadgeText) navBadgeText.textContent = formatted;
     const navBadge = document.querySelector('.model-badge');
-    if (navBadge) {
-      navBadge.title = 'Powered by Google ' + formatted + ' Vision OCR';
-    }
+    if (navBadge) navBadge.title = 'Powered by Google ' + formatted + ' Vision OCR';
     
-    // 2. Update or insert model badge in results metadata header (.badge-group)
     let resModelBadge = document.getElementById('badge-model-used');
     if (!resModelBadge) {
       const badgeGroup = document.querySelector('.meta-badges-row .badge-group');
@@ -517,7 +477,6 @@ def index():
     }
   }
 
-  // Intercept fetch to capture the real model used from /extract response
   const originalFetch = window.fetch;
   window.fetch = async function(...args) {
     const response = await originalFetch.apply(this, args);
@@ -537,25 +496,9 @@ def index():
     return response;
   };
 
-  // Restore stored model badge on load
-  const storedModel = sessionStorage.getItem('docsnap_model_used');
-  if (storedModel) {
-    updateModelBadges(storedModel);
-  }
+  const storedModel = sessionStorage.getItem('docsnap_model_used') || 'gemini-3.8-flash';
+  updateModelBadges(storedModel);
 
-  // Watch for results view rendering so badge is always injected in results metadata
-  const observer = new MutationObserver(() => {
-    const stored = sessionStorage.getItem('docsnap_model_used');
-    if (stored) {
-      const badgeGroup = document.querySelector('.meta-badges-row .badge-group');
-      if (badgeGroup && !document.getElementById('badge-model-used')) {
-        updateModelBadges(stored);
-      }
-    }
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
-
-  // Retry status poller for processing screen
   setInterval(async () => {
     try {
       const procScreen = document.getElementById('screen-processing');
@@ -564,15 +507,11 @@ def index():
         const res = await originalFetch('/extract/status');
         if (res.ok) {
           const data = await res.json();
-          if (sub && data.status) {
-            sub.textContent = data.status;
-          }
+          if (sub && data.status) sub.textContent = data.status;
         }
-      } else if (sub && sub.textContent && sub.textContent.startsWith('Gemini is busy')) {
-        sub.textContent = defaultSubtitle;
       }
     } catch (e) {}
-  }, 300);
+  }, 400);
 })();
 </script>
 </body>
@@ -581,22 +520,19 @@ def index():
 
 @app.route('/extract/status', methods=['GET'])
 def extract_status():
-    """Returns the current Gemini retry status for real-time UI updates."""
     global CURRENT_RETRY_STATUS
     return jsonify({"status": CURRENT_RETRY_STATUS})
 
 @app.route('/static/samples/<filename>')
 def serve_sample(filename):
-    """Serves sample image files."""
     return send_from_directory('static/samples', filename)
 
 @app.route('/extract', methods=['POST'])
 def extract_document():
     """
-    Accepts an uploaded image, sends it to Gemini AI (gemini-2.5-flash with fallback to gemini-3.5-flash-lite),
-    and returns detected doc_type and structured JSON data.
-    Retries up to 4 times on 503, 429, and timeouts with exponential backoff (2s, 4s, 8s, 16s).
-    Shows retry status in UI, resizes images > 2000px, and caches results by image hash.
+    Accepts an uploaded image, runs Gemini AI vision extraction with automatic fallback,
+    runs Verification Agent and Sensitive Data detection, persists to database history,
+    and returns rich structured results.
     """
     global CURRENT_RETRY_STATUS, EXTRACTION_CACHE
     if 'image' not in request.files:
@@ -604,10 +540,7 @@ def extract_document():
     
     file = request.files['image']
     raw_filename = file.filename or 'upload.png'
-    if '.' not in raw_filename:
-        filename = f"{raw_filename}.png"
-    else:
-        filename = raw_filename
+    filename = f"{raw_filename}.png" if '.' not in raw_filename else raw_filename
     
     if not allowed_file(filename):
         return jsonify({"error": "Invalid file format. Supported formats are PNG, JPG, JPEG, and WEBP."}), 400
@@ -616,25 +549,23 @@ def extract_document():
     if len(raw_image_bytes) > 5 * 1024 * 1024:
         return jsonify({"error": "Image file exceeds the 5MB size limit. Please upload a smaller image."}), 400
     
-    # 1. Cache lookup by image hash
     raw_image_hash = hashlib.sha256(raw_image_bytes).hexdigest()
-    if raw_image_hash in EXTRACTION_CACHE:
-        return jsonify(EXTRACTION_CACHE[raw_image_hash])
     
-    # Validate image integrity with PIL
+    # Check duplicate against existing history
+    duplicate_info = database.find_duplicate_document(file_hash=raw_image_hash)
+    
+    # PIL validation & thumbnail generation
     try:
         pil_img = Image.open(io.BytesIO(raw_image_bytes))
         pil_img.verify()
         pil_img = Image.open(io.BytesIO(raw_image_bytes))
+        pil_img = ImageOps.exif_transpose(pil_img)
     except Exception:
         return jsonify({"error": "Corrupted or invalid image file. Please upload a valid image."}), 400
     
-    try:
-        pil_img = ImageOps.exif_transpose(pil_img)
-    except Exception:
-        pass
+    thumbnail_data_url = generate_thumbnail_base64(pil_img)
     
-    # 2. Resize images larger than 2000px on the longest side before sending
+    # Resize images larger than 2000px
     orig_w, orig_h = pil_img.size
     longest_side = max(orig_w, orig_h)
     if longest_side > 2000:
@@ -642,23 +573,17 @@ def extract_document():
         new_w = max(1, int(round(orig_w * scale)))
         new_h = max(1, int(round(orig_h * scale)))
         pil_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-        
         out_buf = io.BytesIO()
         fmt = (pil_img.format or 'JPEG').upper()
         if fmt in ('JPG', 'JPEG'):
-            if pil_img.mode in ('RGBA', 'LA', 'P'):
-                pil_img = pil_img.convert('RGB')
+            if pil_img.mode in ('RGBA', 'LA', 'P'): pil_img = pil_img.convert('RGB')
             pil_img.save(out_buf, format='JPEG', quality=90)
             mime_type = 'image/jpeg'
         elif fmt == 'PNG':
             pil_img.save(out_buf, format='PNG')
             mime_type = 'image/png'
-        elif fmt == 'WEBP':
-            pil_img.save(out_buf, format='WEBP', quality=90)
-            mime_type = 'image/webp'
         else:
-            if pil_img.mode in ('RGBA', 'LA', 'P'):
-                pil_img = pil_img.convert('RGB')
+            if pil_img.mode in ('RGBA', 'LA', 'P'): pil_img = pil_img.convert('RGB')
             pil_img.save(out_buf, format='JPEG', quality=90)
             mime_type = 'image/jpeg'
         image_bytes = out_buf.getvalue()
@@ -668,68 +593,47 @@ def extract_document():
         image_bytes = raw_image_bytes
 
     resized_image_hash = hashlib.sha256(image_bytes).hexdigest()
-    if resized_image_hash in EXTRACTION_CACHE:
-        return jsonify(EXTRACTION_CACHE[resized_image_hash])
-    
     api_key = os.getenv('GEMINI_API_KEY', '').strip()
     
-    # Check if this is a sample image request or sample filename
     filename_lower = filename.lower()
     is_sample_timetable = 'sample_timetable' in filename_lower
     is_sample_receipt = 'sample_receipt' in filename_lower
     is_sample_notice = 'sample_notice' in filename_lower
     
-    # If no valid API key is configured
+    # 1. Cache hit check
+    if raw_image_hash in EXTRACTION_CACHE:
+        res = dict(EXTRACTION_CACHE[raw_image_hash])
+        attach_post_processing(res, raw_filename, raw_image_hash, thumbnail_data_url, duplicate_info)
+        return jsonify(res)
+        
+    # If no valid API key is configured, fallback to sample mocks
     if not api_key or api_key == 'your_gemini_api_key_here':
-        if is_sample_timetable:
-            mock = dict(SAMPLE_MOCKS["timetable"])
+        if is_sample_timetable or is_sample_receipt or is_sample_notice:
+            key = 'timetable' if is_sample_timetable else ('receipt' if is_sample_receipt else 'notice')
+            mock = dict(SAMPLE_MOCKS[key])
             mock["_demo_mode"] = True
             mock["_note"] = "Extracted using DocSnap sample demo mode. To process custom images with live AI, add GEMINI_API_KEY in .env."
-            mock["model_used"] = "gemini-2.5-flash"
-            mock["model"] = "gemini-2.5-flash"
+            mock["model_used"] = "gemini-3.8-flash"
+            mock["model"] = "gemini-3.8-flash"
             EXTRACTION_CACHE[raw_image_hash] = mock
-            EXTRACTION_CACHE[resized_image_hash] = mock
-            return jsonify(mock)
-        elif is_sample_receipt:
-            mock = dict(SAMPLE_MOCKS["receipt"])
-            mock["_demo_mode"] = True
-            mock["_note"] = "Extracted using DocSnap sample demo mode. To process custom images with live AI, add GEMINI_API_KEY in .env."
-            mock["model_used"] = "gemini-2.5-flash"
-            mock["model"] = "gemini-2.5-flash"
-            EXTRACTION_CACHE[raw_image_hash] = mock
-            EXTRACTION_CACHE[resized_image_hash] = mock
-            return jsonify(mock)
-        elif is_sample_notice:
-            mock = dict(SAMPLE_MOCKS["notice"])
-            mock["_demo_mode"] = True
-            mock["_note"] = "Extracted using DocSnap sample demo mode. To process custom images with live AI, add GEMINI_API_KEY in .env."
-            mock["model_used"] = "gemini-2.5-flash"
-            mock["model"] = "gemini-2.5-flash"
-            EXTRACTION_CACHE[raw_image_hash] = mock
-            EXTRACTION_CACHE[resized_image_hash] = mock
+            attach_post_processing(mock, raw_filename, raw_image_hash, thumbnail_data_url, duplicate_info)
             return jsonify(mock)
         else:
             return jsonify({
                 "error": "GEMINI_API_KEY is not configured in .env. Please set your Gemini API key in the .env file to enable live AI vision extraction."
             }), 400
-    
-    # 3. Gemini retry and fallback strategy
-    # Primary model: "gemini-2.5-flash", fallback: "gemini-3.5-flash-lite"
-    MODELS_TO_TRY = ["gemini-2.5-flash", "gemini-3.5-flash-lite"]
-    BACKOFF_DELAYS = [2, 4, 8, 16]
-    
+
+    # Live Gemini Vision AI Extraction with retry and fallback
     try:
         from google import genai
         from google.genai import types
         
         client = genai.Client(api_key=api_key)
-        
         last_error = None
         result_json = None
         CURRENT_RETRY_STATUS = ""
         
         for model_name in MODELS_TO_TRY:
-            # 1 initial attempt + up to 4 retries with exponential backoff [2, 4, 8, 16]
             for attempt in range(len(BACKOFF_DELAYS) + 1):
                 if attempt > 0:
                     delay = BACKOFF_DELAYS[attempt - 1]
@@ -737,18 +641,35 @@ def extract_document():
                     time.sleep(delay)
                     
                 try:
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=[
-                            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                            "Extract and structure this document into JSON strictly following the system instructions."
-                        ],
-                        config=types.GenerateContentConfig(
+                    try:
+                        cfg = types.GenerateContentConfig(
+                            system_instruction=SYSTEM_PROMPT,
+                            temperature=0.1,
+                            response_mime_type="application/json",
+                            thinking_config=types.ThinkingConfig(thinking_budget=0)
+                        )
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=[
+                                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                                "Extract and structure this document into JSON strictly following the system instructions."
+                            ],
+                            config=cfg
+                        )
+                    except Exception:
+                        cfg = types.GenerateContentConfig(
                             system_instruction=SYSTEM_PROMPT,
                             temperature=0.1,
                             response_mime_type="application/json"
                         )
-                    )
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=[
+                                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                                "Extract and structure this document into JSON strictly following the system instructions."
+                            ],
+                            config=cfg
+                        )
                     
                     raw_text = response.text or ""
                     cleaned = clean_json_text(raw_text)
@@ -769,17 +690,12 @@ def extract_document():
                     err_str = str(api_err).lower()
                     err_code = getattr(api_err, 'code', None) or getattr(api_err, 'status_code', None)
                     
-                    # On a 404 for any model, skip to the next fallback instead of retrying
-                    if err_code == 404 or "404" in err_str or "not_found" in err_str or "not found" in err_str or "no longer available" in err_str:
+                    if err_code == 404 or "404" in err_str or "not_found" in err_str or "no longer available" in err_str:
                         CURRENT_RETRY_STATUS = ""
                         break
-                        
-                    # Requirement 2: On a 429 that mentions daily quota, do NOT retry the same model. Switch to fallback immediately.
                     if is_daily_quota_error(api_err):
                         CURRENT_RETRY_STATUS = ""
                         break
-                        
-                    # Requirement 3: Only retry (with backoff) on 503 and short per-minute 429s
                     if is_retryable_error(api_err):
                         if attempt < len(BACKOFF_DELAYS):
                             continue
@@ -792,37 +708,20 @@ def extract_document():
                         
             if result_json is not None:
                 break
-        
+                
         CURRENT_RETRY_STATUS = ""
         
+        # Sample fallbacks on quota exhaustion
         if result_json is None:
-            # Fallback for sample images if live Gemini quota is exhausted after retries
-            if is_sample_timetable:
-                mock = dict(SAMPLE_MOCKS["timetable"])
+            if is_sample_timetable or is_sample_receipt or is_sample_notice:
+                key = 'timetable' if is_sample_timetable else ('receipt' if is_sample_receipt else 'notice')
+                mock = dict(SAMPLE_MOCKS[key])
                 mock["_demo_mode"] = True
-                mock["_note"] = "Gemini quota reached. Loaded sample timetable."
-                mock["model_used"] = "gemini-2.5-flash"
-                mock["model"] = "gemini-2.5-flash"
+                mock["_note"] = "Gemini quota reached. Loaded sample document."
+                mock["model_used"] = "gemini-3.8-flash"
+                mock["model"] = "gemini-3.8-flash"
                 EXTRACTION_CACHE[raw_image_hash] = mock
-                EXTRACTION_CACHE[resized_image_hash] = mock
-                return jsonify(mock)
-            elif is_sample_receipt:
-                mock = dict(SAMPLE_MOCKS["receipt"])
-                mock["_demo_mode"] = True
-                mock["_note"] = "Gemini quota reached. Loaded sample receipt."
-                mock["model_used"] = "gemini-2.5-flash"
-                mock["model"] = "gemini-2.5-flash"
-                EXTRACTION_CACHE[raw_image_hash] = mock
-                EXTRACTION_CACHE[resized_image_hash] = mock
-                return jsonify(mock)
-            elif is_sample_notice:
-                mock = dict(SAMPLE_MOCKS["notice"])
-                mock["_demo_mode"] = True
-                mock["_note"] = "Gemini quota reached. Loaded sample notice."
-                mock["model_used"] = "gemini-2.5-flash"
-                mock["model"] = "gemini-2.5-flash"
-                EXTRACTION_CACHE[raw_image_hash] = mock
-                EXTRACTION_CACHE[resized_image_hash] = mock
+                attach_post_processing(mock, raw_filename, raw_image_hash, thumbnail_data_url, duplicate_info)
                 return jsonify(mock)
                 
             return jsonify({
@@ -835,35 +734,262 @@ def extract_document():
         if 'field_confidence' not in result_json or not isinstance(result_json['field_confidence'], dict):
             result_json['field_confidence'] = {}
             
-        # Check if model detected image as not a valid document
-        if result_json.get('doc_type') == 'unknown' or not result_json.get('data'):
-            return jsonify({
-                "error": "The uploaded image does not appear to be a timetable, receipt, or notice. Please upload a clear document photo or screenshot."
-            }), 422
-            
-        # Cache successful extraction by image hash
-        result_json["model_used"] = result_json.get("model_used") or model_name
-        result_json["model"] = result_json.get("model") or model_name
-        EXTRACTION_CACHE[raw_image_hash] = result_json
-        EXTRACTION_CACHE[resized_image_hash] = result_json
+        # Cache successful extraction
+        EXTRACTION_CACHE[raw_image_hash] = dict(result_json)
+        EXTRACTION_CACHE[resized_image_hash] = dict(result_json)
         
+        attach_post_processing(result_json, raw_filename, raw_image_hash, thumbnail_data_url, duplicate_info)
         return jsonify(result_json)
         
     except Exception as e:
         CURRENT_RETRY_STATUS = ""
-        return jsonify({
-            "error": f"An unexpected error occurred during extraction: {str(e)}"
-        }), 500
+        return jsonify({"error": f"An unexpected error occurred during extraction: {str(e)}"}), 500
     finally:
         CURRENT_RETRY_STATUS = ""
+
+def attach_post_processing(result_dict, filename, file_hash, thumbnail_data_url, duplicate_info=None):
+    """
+    Applies Verification Agent rules, Sensitive Data scanning,
+    generates summary preview, and creates persistent database record.
+    """
+    doc_type = result_dict.get('doc_type', 'other')
+    data = result_dict.get('data') or {}
+    field_conf = result_dict.get('field_confidence') or {}
+    
+    # 1. Verification Agent
+    ver_report = verification.verify_document(doc_type, data, field_conf)
+    result_dict['verification_report'] = ver_report
+    result_dict['verification_status'] = ver_report['status']
+    
+    # 2. Sensitive Data Detection
+    sens_info = sensitive_data.scan_document_for_sensitive_data(data)
+    result_dict['sensitive_data_info'] = sens_info
+    
+    # 3. Duplicate Info
+    if duplicate_info:
+        result_dict['duplicate_info'] = {
+            "found": True,
+            "existing_id": duplicate_info['id'],
+            "existing_filename": duplicate_info['filename'],
+            "created_at": duplicate_info['created_at'],
+            "verification_status": duplicate_info['verification_status']
+        }
+    else:
+        result_dict['duplicate_info'] = {"found": False}
+        
+    result_dict['thumbnail'] = thumbnail_data_url
+    
+    # 4. Save to persistent SQLite Database (Version 1: AI Generated)
+    try:
+        saved_doc = database.create_document(
+            filename=filename,
+            file_hash=file_hash,
+            doc_type=doc_type,
+            language=result_dict.get('language', 'English'),
+            ai_confidence=float(result_dict.get('confidence', 0.95)),
+            verification_status=ver_report['status'],
+            ai_extracted_data=data,
+            verification_report=ver_report,
+            sensitive_data_info=sens_info,
+            thumbnail=thumbnail_data_url
+        )
+        if saved_doc:
+            result_dict['id'] = saved_doc['id']
+            result_dict['created_at'] = saved_doc['created_at']
+            result_dict['versions'] = saved_doc.get('versions', [])
+    except Exception as dbe:
+        result_dict['id'] = str(uuid.uuid4())
+        result_dict['_db_error'] = str(dbe)
+
+# ==============================================================================
+# REST API: DOCUMENT MANAGEMENT & HISTORY
+# ==============================================================================
+
+@app.route('/api/documents', methods=['GET'])
+def list_documents():
+    """Returns persistent document history with search, filters, and sorting."""
+    q = request.args.get('q', '').strip()
+    doc_type = request.args.get('doc_type', 'all')
+    language = request.args.get('language', 'all')
+    status = request.args.get('status', 'all')
+    sort_order = request.args.get('sort', 'newest')
+    limit = int(request.args.get('limit', 100))
+    offset = int(request.args.get('offset', 0))
+    
+    docs = database.get_documents(
+        query=q,
+        doc_type=doc_type,
+        language=language,
+        verification_status=status,
+        sort_order=sort_order,
+        limit=limit,
+        offset=offset
+    )
+    return jsonify({"documents": docs, "count": len(docs)})
+
+@app.route('/api/documents/<doc_id>', methods=['GET'])
+def get_document(doc_id):
+    """Retrieves document record, full data payload, and version history."""
+    doc = database.get_document_by_id(doc_id)
+    if not doc:
+        return jsonify({"error": "Document not found."}), 404
+    return jsonify(doc)
+
+@app.route('/api/documents/<doc_id>', methods=['PUT'])
+def update_document(doc_id):
+    """
+    Updates document with User Corrected Data.
+    Maintains separate versions and computes diff without overwriting original AI data.
+    """
+    payload = request.get_json(silent=True)
+    if not payload:
+        return jsonify({"error": "No JSON payload provided."}), 400
+        
+    data = payload.get('data')
+    if data is None:
+        return jsonify({"error": "Data object is required."}), 400
+        
+    existing = database.get_document_by_id(doc_id)
+    if not existing:
+        return jsonify({"error": "Document not found."}), 404
+        
+    # Re-run Verification Agent on edited data
+    ver_report = verification.verify_document(existing['doc_type'], data)
+    
+    updated_doc = database.update_document_data(
+        doc_id=doc_id,
+        updated_data=data,
+        changed_by="User",
+        change_type="user_edit",
+        version_label="👤 User Edited",
+        verification_status=ver_report['status'],
+        verification_report=ver_report
+    )
+    return jsonify(updated_doc)
+
+@app.route('/api/documents/<doc_id>/verify', methods=['POST'])
+def verify_document_endpoint(doc_id):
+    """
+    Marks document as Final Verified Data.
+    Records Version 3 (or latest verified) and updates status to 'verified'.
+    """
+    payload = request.get_json(silent=True) or {}
+    existing = database.get_document_by_id(doc_id)
+    if not existing:
+        return jsonify({"error": "Document not found."}), 404
+        
+    data = payload.get('data') or existing.get('user_corrected_data') or existing.get('ai_extracted_data')
+    ver_report = verification.verify_document(existing['doc_type'], data)
+    ver_report['status'] = 'verified'
+    
+    updated_doc = database.verify_and_save_document(
+        doc_id=doc_id,
+        verified_data=data,
+        verification_report=ver_report
+    )
+    return jsonify(updated_doc)
+
+@app.route('/api/documents/<doc_id>', methods=['DELETE'])
+def delete_document_endpoint(doc_id):
+    """Deletes document and its version history."""
+    success = database.delete_document(doc_id)
+    if not success:
+        return jsonify({"error": "Document not found or delete failed."}), 404
+    return jsonify({"success": True, "message": "Document deleted successfully."})
+
+@app.route('/api/documents/<doc_id>/versions', methods=['GET'])
+def get_document_versions(doc_id):
+    """Returns full version timeline and diff comparisons."""
+    doc = database.get_document_by_id(doc_id)
+    if not doc:
+        return jsonify({"error": "Document not found."}), 404
+    return jsonify({
+        "document_id": doc_id,
+        "versions": doc.get('versions', []),
+        "ai_extracted_data": doc.get('ai_extracted_data'),
+        "user_corrected_data": doc.get('user_corrected_data'),
+        "verified_data": doc.get('verified_data')
+    })
+
+@app.route('/api/documents/<doc_id>/feedback', methods=['POST'])
+def save_feedback_endpoint(doc_id):
+    """Saves user extraction accuracy feedback."""
+    payload = request.get_json(silent=True) or {}
+    success = database.save_document_feedback(doc_id, payload)
+    return jsonify({"success": success})
+
+@app.route('/api/document/verify-agent', methods=['POST'])
+def run_verification_agent():
+    """Directly triggers the Verification Agent on arbitrary document data."""
+    payload = request.get_json(silent=True) or {}
+    doc_type = payload.get('doc_type', 'other')
+    data = payload.get('data', {})
+    field_conf = payload.get('field_confidence', {})
+    report = verification.verify_document(doc_type, data, field_conf)
+    return jsonify(report)
+
+@app.route('/api/document/ask', methods=['POST'])
+def ask_document_endpoint():
+    """Grounded Q&A: answers questions strictly from document context."""
+    payload = request.get_json(silent=True) or {}
+    question = payload.get('question', '').strip()
+    data = payload.get('data', {})
+    doc_type = payload.get('doc_type', 'other')
+    
+    if not question:
+        return jsonify({"answer": "Please ask a question about the document."}), 400
+        
+    result = ai_services.ask_document_ai(data, doc_type, question)
+    return jsonify(result)
+
+@app.route('/api/document/summary', methods=['POST'])
+def summary_endpoint():
+    """Generates structured executive summary for document."""
+    payload = request.get_json(silent=True) or {}
+    data = payload.get('data', {})
+    doc_type = payload.get('doc_type', 'other')
+    doc_id = payload.get('doc_id')
+    
+    summary = ai_services.generate_document_summary(data, doc_type)
+    if doc_id:
+        database.save_document_summary(doc_id, summary)
+    return jsonify(summary)
+
+@app.route('/api/translate', methods=['POST'])
+def translate_endpoint():
+    """Translates document text fields to target language without altering original."""
+    payload = request.get_json(silent=True) or {}
+    data = payload.get('data', {})
+    target_language = payload.get('target_language', 'English')
+    translated = ai_services.translate_document_content(data, target_language)
+    return jsonify({"original": data, "translated": translated, "target_language": target_language})
+
+@app.route('/api/analytics', methods=['GET'])
+def analytics_endpoint():
+    """Returns analytics dashboard metrics."""
+    metrics = database.get_analytics_metrics()
+    return jsonify(metrics)
+
+@app.route('/api/check-duplicate', methods=['POST'])
+def check_duplicate_endpoint():
+    """Checks if uploaded file hash or title already exists in history."""
+    payload = request.get_json(silent=True) or {}
+    file_hash = payload.get('file_hash')
+    title = payload.get('title')
+    doc_type = payload.get('doc_type')
+    
+    dup = database.find_duplicate_document(file_hash=file_hash, title=title, doc_type=doc_type)
+    return jsonify({"is_duplicate": dup is not None, "match": dup})
+
+# ==============================================================================
+# EXPORT ROUTES (CALENDAR, CSV, EXCEL)
+# ==============================================================================
 
 @app.route('/export/ics', methods=['POST'])
 def export_ics():
     """
-    Exports structured Timetable (recurring weekly events) or Notice (single event)
-    to a downloadable RFC 5545 .ics file in timezone Asia/Kolkata.
-    Includes DTSTAMP on every VEVENT, CRLF line endings, VTIMEZONE block for Asia/Kolkata,
-    and X-WR-CALNAME:DocSnap Timetable.
+    Exports structured Timetable or Notice to .ics.
+    Defaults to Final Verified Data.
     """
     try:
         payload = request.get_json(silent=True)
@@ -871,7 +997,8 @@ def export_ics():
             return jsonify({"error": "No JSON payload provided."}), 400
         
         doc_type = payload.get('doc_type')
-        data = payload.get('data', {})
+        # Default to verified_data if present, else data
+        data = payload.get('verified_data') or payload.get('data', {})
         
         if not data:
             return jsonify({"error": "No document data found to export."}), 400
@@ -883,7 +1010,7 @@ def export_ics():
         if doc_type == 'timetable':
             title = data.get('title') or "Timetable Schedule"
             filename = f"timetable_{re.sub(r'[^a-zA-Z0-9_]+', '_', title.lower())[:30]}"
-        elif doc_type == 'notice':
+        elif doc_type in ('notice', 'poster'):
             title = data.get('title') or "Notice Event"
             filename = f"notice_{re.sub(r'[^a-zA-Z0-9_]+', '_', title.lower())[:30]}"
         else:
@@ -892,62 +1019,224 @@ def export_ics():
         response = Response(ics_text, mimetype='text/calendar; charset=utf-8')
         response.headers['Content-Disposition'] = f'attachment; filename="{filename}.ics"'
         return response
-        
     except Exception as e:
         return jsonify({"error": f"Failed to generate calendar export: {str(e)}"}), 500
 
 @app.route('/export/csv', methods=['POST'])
 def export_csv():
     """
-    Exports structured Receipt data into a clean CSV format
-    with one row per item plus merchant, date, total, and category.
+    Exports structured Receipt or Timetable data into clean CSV.
+    Defaults to Final Verified Data.
     """
     try:
         payload = request.get_json(silent=True)
         if not payload:
             return jsonify({"error": "No JSON payload provided."}), 400
         
-        data = payload.get('data', {})
-        merchant = data.get('merchant') or "Receipt"
-        date = data.get('date') or ""
-        total = data.get('total') or ""
-        currency = data.get('currency') or ""
-        category = data.get('category') or ""
-        items = data.get('items', [])
+        doc_type = payload.get('doc_type', 'receipt')
+        data = payload.get('verified_data') or payload.get('data', {})
         
         output = io.StringIO()
         writer = csv.writer(output)
         
-        # Header row
-        writer.writerow([
-            "Merchant",
-            "Date",
-            "Category",
-            "Currency",
-            "Item Name",
-            "Quantity",
-            "Price",
-            "Total Amount"
-        ])
-        
-        if items:
-            for item in items:
-                name = item.get('name') or ""
-                qty = item.get('qty', 1)
-                price = item.get('price', "")
-                writer.writerow([merchant, date, category, currency, name, qty, price, total])
-        else:
-            writer.writerow([merchant, date, category, currency, "General Expense", 1, total, total])
+        if doc_type == 'receipt':
+            merchant = data.get('merchant') or "Receipt"
+            date = data.get('date') or ""
+            total = data.get('total') or ""
+            currency = data.get('currency') or ""
+            category = data.get('category') or ""
+            items = data.get('items', [])
             
-        safe_merchant = re.sub(r'[^a-zA-Z0-9_]+', '_', merchant.lower())[:30] or "receipt"
-        filename = f"receipt_{safe_merchant}_{date or 'export'}.csv"
-        
+            writer.writerow(["Merchant", "Date", "Category", "Currency", "Item Name", "Quantity", "Price", "Total Amount"])
+            if items:
+                for item in items:
+                    name = item.get('name') or ""
+                    qty = item.get('qty', 1)
+                    price = item.get('price', "")
+                    writer.writerow([merchant, date, category, currency, name, qty, price, total])
+            else:
+                writer.writerow([merchant, date, category, currency, "General Expense", 1, total, total])
+                
+            safe_name = re.sub(r'[^a-zA-Z0-9_]+', '_', merchant.lower())[:30] or "receipt"
+            filename = f"receipt_{safe_name}_{date or 'export'}.csv"
+            
+        elif doc_type == 'timetable':
+            title = data.get('title') or "Timetable"
+            entries = data.get('entries', [])
+            writer.writerow(["Schedule Title", "Day", "Start Time", "End Time", "Subject", "Room / Lab", "Faculty"])
+            for e in entries:
+                writer.writerow([
+                    title,
+                    e.get('day', ''),
+                    e.get('start_time', ''),
+                    e.get('end_time', ''),
+                    e.get('subject', ''),
+                    e.get('room', ''),
+                    e.get('faculty', '')
+                ])
+            safe_name = re.sub(r'[^a-zA-Z0-9_]+', '_', title.lower())[:30] or "timetable"
+            filename = f"timetable_{safe_name}.csv"
+        else:
+            writer.writerow(["Field", "Value"])
+            for k, v in data.items():
+                writer.writerow([k, str(v)])
+            filename = "docsnap_export.csv"
+            
         response = Response(output.getvalue(), mimetype='text/csv')
         response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
         return response
-        
     except Exception as e:
         return jsonify({"error": f"Failed to generate CSV export: {str(e)}"}), 500
+
+@app.route('/export/excel', methods=['POST'])
+def export_excel():
+    """
+    Exports structured Receipt or Timetable data into styled Microsoft Excel (.xlsx).
+    Uses openpyxl with formatted headers, alternating rows, and data summaries.
+    """
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+
+        payload = request.get_json(silent=True)
+        if not payload:
+            return jsonify({"error": "No JSON payload provided."}), 400
+            
+        doc_type = payload.get('doc_type', 'receipt')
+        data = payload.get('verified_data') or payload.get('data', {})
+        export_mode = payload.get('version_type', 'verified')
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = f"{doc_type.capitalize()} Data"
+        
+        # Styles
+        header_fill = PatternFill(start_color="4F46E5", end_color="4F46E5", fill_type="solid")
+        header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
+        title_font = Font(name="Segoe UI", size=14, bold=True, color="1E1B4B")
+        regular_font = Font(name="Segoe UI", size=10)
+        bold_font = Font(name="Segoe UI", size=10, bold=True)
+        thin_border = Border(
+            left=Side(style='thin', color='E2E8F0'),
+            right=Side(style='thin', color='E2E8F0'),
+            top=Side(style='thin', color='E2E8F0'),
+            bottom=Side(style='thin', color='E2E8F0')
+        )
+        
+        if doc_type == 'receipt':
+            merchant = data.get('merchant') or "Receipt"
+            date = data.get('date') or ""
+            total = data.get('total') or 0
+            currency = data.get('currency') or "₹"
+            category = data.get('category') or ""
+            items = data.get('items', [])
+            
+            # Title
+            ws.cell(row=1, column=1, value=f"{merchant} - Expense Report").font = title_font
+            ws.cell(row=2, column=1, value=f"Date: {date} | Category: {category} | Exported via DocSnap ({export_mode.upper()} DATA)").font = regular_font
+            
+            headers = ["#", "Item Description", "Quantity", f"Unit Price ({currency})", f"Line Total ({currency})"]
+            for col_idx, h in enumerate(headers, 1):
+                c = ws.cell(row=4, column=col_idx, value=h)
+                c.fill = header_fill
+                c.font = header_font
+                c.alignment = Alignment(horizontal="center" if col_idx in (1, 3) else ("right" if col_idx >= 4 else "left"))
+                
+            cur_row = 5
+            for idx, item in enumerate(items, 1):
+                name = item.get('name') or ""
+                qty = item.get('qty', 1)
+                price = item.get('price', 0)
+                line_total = round(qty * price, 2)
+                
+                ws.cell(row=cur_row, column=1, value=idx).alignment = Alignment(horizontal="center")
+                ws.cell(row=cur_row, column=2, value=name)
+                ws.cell(row=cur_row, column=3, value=qty).alignment = Alignment(horizontal="center")
+                ws.cell(row=cur_row, column=4, value=price).alignment = Alignment(horizontal="right")
+                ws.cell(row=cur_row, column=5, value=line_total).alignment = Alignment(horizontal="right")
+                
+                for c_idx in range(1, 6):
+                    cell = ws.cell(row=cur_row, column=c_idx)
+                    cell.font = regular_font
+                    cell.border = thin_border
+                cur_row += 1
+                
+            # Total row
+            ws.cell(row=cur_row, column=4, value="Total Amount:").font = bold_font
+            ws.cell(row=cur_row, column=4).alignment = Alignment(horizontal="right")
+            tot_cell = ws.cell(row=cur_row, column=5, value=total)
+            tot_cell.font = bold_font
+            tot_cell.alignment = Alignment(horizontal="right")
+            tot_cell.border = thin_border
+            
+            safe_name = re.sub(r'[^a-zA-Z0-9_]+', '_', merchant.lower())[:30] or "receipt"
+            filename = f"receipt_{safe_name}_{date or 'export'}.xlsx"
+            
+        elif doc_type == 'timetable':
+            title = data.get('title') or "Class Timetable Schedule"
+            entries = data.get('entries', [])
+            
+            ws.cell(row=1, column=1, value=title).font = title_font
+            ws.cell(row=2, column=1, value=f"Weekly Class Schedule | Exported via DocSnap ({export_mode.upper()} DATA)").font = regular_font
+            
+            headers = ["#", "Day", "Start Time", "End Time", "Subject / Course", "Room / Lab", "Faculty / Instructor"]
+            for col_idx, h in enumerate(headers, 1):
+                c = ws.cell(row=4, column=col_idx, value=h)
+                c.fill = header_fill
+                c.font = header_font
+                c.alignment = Alignment(horizontal="center" if col_idx in (1, 2, 3, 4) else "left")
+                
+            cur_row = 5
+            for idx, e in enumerate(entries, 1):
+                ws.cell(row=cur_row, column=1, value=idx).alignment = Alignment(horizontal="center")
+                ws.cell(row=cur_row, column=2, value=e.get('day', '')).alignment = Alignment(horizontal="center")
+                ws.cell(row=cur_row, column=3, value=e.get('start_time', '')).alignment = Alignment(horizontal="center")
+                ws.cell(row=cur_row, column=4, value=e.get('end_time', '')).alignment = Alignment(horizontal="center")
+                ws.cell(row=cur_row, column=5, value=e.get('subject', ''))
+                ws.cell(row=cur_row, column=6, value=e.get('room', ''))
+                ws.cell(row=cur_row, column=7, value=e.get('faculty', ''))
+                
+                for c_idx in range(1, 8):
+                    cell = ws.cell(row=cur_row, column=c_idx)
+                    cell.font = regular_font
+                    cell.border = thin_border
+                cur_row += 1
+                
+            safe_name = re.sub(r'[^a-zA-Z0-9_]+', '_', title.lower())[:30] or "timetable"
+            filename = f"timetable_{safe_name}.xlsx"
+        else:
+            ws.cell(row=1, column=1, value="DocSnap Structured Data Export").font = title_font
+            headers = ["Field", "Extracted Value"]
+            for col_idx, h in enumerate(headers, 1):
+                c = ws.cell(row=3, column=col_idx, value=h)
+                c.fill = header_fill
+                c.font = header_font
+            cur_row = 4
+            for k, v in data.items():
+                ws.cell(row=cur_row, column=1, value=str(k)).font = bold_font
+                ws.cell(row=cur_row, column=2, value=str(v)).font = regular_font
+                cur_row += 1
+            filename = "docsnap_export.xlsx"
+            
+        # Auto-adjust column widths
+        for col in ws.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
+            col_letter = get_column_letter(col[0].column)
+            ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+            
+        out_buf = io.BytesIO()
+        wb.save(out_buf)
+        out_buf.seek(0)
+        
+        response = Response(
+            out_buf.getvalue(),
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+    except Exception as e:
+        return jsonify({"error": f"Failed to generate Excel export: {str(e)}"}), 500
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
@@ -955,5 +1244,3 @@ if __name__ == '__main__':
     use_reloader = os.getenv('FLASK_USE_RELOADER', '0') == '1'
     print(f"Starting DocSnap server on http://localhost:{port}")
     app.run(host='0.0.0.0', port=port, debug=debug, use_reloader=use_reloader)
-
-

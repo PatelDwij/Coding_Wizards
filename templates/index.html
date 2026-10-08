@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DocSnap - Screenshots In. Structured Data Out.</title>
-  <meta name="description" content="Instantly convert screenshots of timetables, receipts, and notices into structured calendar events, spreadsheets, and clean JSON using Gemini 2.5 Flash vision AI.">
+  <title>DocSnap - AI Document Extraction, Verification & History Platform</title>
+  <meta name="description" content="Convert screenshot images into structured data with AI extraction, deterministic verification agents, field confidence auditing, version history, and human-in-the-loop validation.">
   
   <!-- Google Fonts: Inter -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   
   <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -19,7 +19,7 @@
     <div class="nav-container">
       <div class="nav-brand" id="brand-logo" tabindex="0" role="button" aria-label="DocSnap Home">
         <div class="brand-icon">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
             <polyline points="14 2 14 8 20 8"></polyline>
             <path d="M16 13H8"></path>
@@ -28,15 +28,58 @@
           </svg>
         </div>
         <div class="brand-text">
-          <span class="brand-name">DocSnap</span>
-          <span class="brand-tagline">Screenshots in. Structured data out.</span>
+          <div class="brand-title-row">
+            <span class="brand-name">DocSnap</span>
+            <span class="brand-badge-v2">AI Verified</span>
+          </div>
+          <span class="brand-tagline">AI extracts. AI checks. Humans verify.</span>
         </div>
       </div>
+
+      <!-- Navigation Links -->
+      <nav class="nav-menu" role="navigation" aria-label="Primary Navigation">
+        <button type="button" class="nav-link active" id="nav-upload" data-screen="upload">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="17 8 12 3 7 8"></polyline>
+            <line x1="12" y1="3" x2="12" y2="15"></line>
+          </svg>
+          <span>Upload</span>
+        </button>
+
+        <button type="button" class="nav-link" id="nav-history" data-screen="history">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="12 6 12 12 14 14"></polyline>
+          </svg>
+          <span>History</span>
+          <span class="nav-counter" id="nav-history-count">3</span>
+        </button>
+
+        <button type="button" class="nav-link" id="nav-dashboard" data-screen="dashboard">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="7" height="9"></rect>
+            <rect x="14" y="3" width="7" height="5"></rect>
+            <rect x="14" y="12" width="7" height="9"></rect>
+            <rect x="3" y="16" width="7" height="5"></rect>
+          </svg>
+          <span>Dashboard</span>
+        </button>
+
+        <button type="button" class="nav-link" id="nav-how-it-works" data-screen="how-it-works">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+          <span>How It Works</span>
+        </button>
+      </nav>
       
       <div class="nav-actions">
-        <div class="model-badge" title="Powered by Google Gemini 2.5 Flash Vision OCR">
+        <div class="model-badge" title="Powered by Google Gemini 3.8 Flash Vision OCR">
           <span class="badge-dot pulse"></span>
-          <span class="badge-text">Gemini 2.5 Flash</span>
+          <span class="badge-text">Gemini 3.8 Flash</span>
         </div>
         <button id="nav-new-btn" class="btn btn-secondary btn-sm hidden" aria-label="Process another document">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -55,6 +98,15 @@
     <!-- Toast Notification Container -->
     <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
+    <!-- Responsible AI Warning Banner -->
+    <div class="responsible-ai-banner" id="responsible-ai-banner">
+      <div class="ai-banner-content">
+        <span class="ai-banner-badge">Responsible AI</span>
+        <span class="ai-banner-text">AI-generated information may contain errors. Always review and verify extracted data before taking critical actions.</span>
+      </div>
+      <button class="ai-banner-dismiss" id="ai-banner-dismiss" aria-label="Dismiss banner">&times;</button>
+    </div>
+
     <!-- Global Error Banner -->
     <div id="error-banner" class="alert alert-error hidden" role="alert">
       <div class="alert-icon">
@@ -72,17 +124,17 @@
     </div>
 
     <!-- ============================================== -->
-    <!-- SCREEN 1: UPLOAD & SAMPLE SELECTOR             -->
+    <!-- SCREEN 1: UPLOAD & MULTI-IMAGE SELECTOR        -->
     <!-- ============================================== -->
     <section id="screen-upload" class="screen-section active">
       <div class="upload-hero">
-        <h1 class="hero-title">Turn any document screenshot into an actionable calendar or spreadsheet</h1>
-        <p class="hero-desc">Upload or paste a timetable, shopping receipt, or event notice. DocSnap identifies the document type, extracts every field with AI, and lets you export in one click.</p>
+        <h1 class="hero-title">Turn any document screenshot into verified structured data</h1>
+        <p class="hero-desc">Upload timetables, receipts, notices, posters, or certificates. DocSnap classifies the layout, runs an automated Verification Agent, audits field-level confidence, and gives you human-in-the-loop control.</p>
       </div>
 
       <!-- Drag & Drop Zone -->
       <div class="drop-zone" id="drop-zone" tabindex="0" role="region" aria-label="Image upload drop zone">
-        <input type="file" id="file-input" accept="image/png, image/jpeg, image/jpg, image/webp" class="visually-hidden">
+        <input type="file" id="file-input" accept="image/png, image/jpeg, image/jpg, image/webp" multiple class="visually-hidden">
         
         <div class="drop-zone-content">
           <div class="drop-icon-wrapper">
@@ -93,13 +145,47 @@
             </svg>
           </div>
           
-          <h2 class="drop-title">Drag & drop your screenshot or photo here</h2>
-          <p class="drop-subtitle">or <button type="button" class="btn-link" id="browse-btn">browse from your computer</button></p>
+          <h2 class="drop-title">Drag & drop your screenshots or photos here</h2>
+          <p class="drop-subtitle">or <button type="button" class="btn-link" id="browse-btn">browse from your computer</button> <span class="badge-subtle">Supports Multi-Upload</span></p>
           
           <div class="drop-meta">
-            <span class="meta-pill">PNG, JPG, JPEG, WEBP</span>
-            <span class="meta-pill">Up to 5 MB</span>
-            <span class="meta-pill meta-shortcut"><kbd>Ctrl</kbd> + <kbd>V</kbd> to paste</span>
+            <span class="meta-pill">PNG, JPG, WEBP</span>
+            <span class="meta-pill">Up to 5 MB per file</span>
+            <span class="meta-pill meta-shortcut"><kbd>Ctrl</kbd> + <kbd>V</kbd> to paste screenshot</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Batch Processing Queue Indicator (hidden when empty) -->
+      <div id="batch-queue-container" class="batch-queue-container hidden">
+        <div class="batch-queue-header">
+          <div class="batch-queue-title-wrap">
+            <span class="batch-queue-title">Batch Processing Queue</span>
+            <span class="badge badge-primary" id="batch-progress-text">Processing 1 of 1...</span>
+          </div>
+          <button type="button" class="btn btn-ghost btn-xs" id="batch-cancel-btn">Clear Queue</button>
+        </div>
+        <div class="batch-progress-bar-bg">
+          <div class="batch-progress-bar-fill" id="batch-progress-bar"></div>
+        </div>
+        <div class="batch-queue-items" id="batch-queue-items"></div>
+      </div>
+
+      <!-- Duplicate Found Banner (When uploading similar doc) -->
+      <div id="upload-duplicate-banner" class="alert alert-warning hidden" role="alert">
+        <div class="alert-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+            <line x1="12" y1="9" x2="12" y2="13"></line>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+        </div>
+        <div class="alert-content">
+          <span class="alert-title">Similar Document Found in History</span>
+          <span class="alert-message" id="upload-duplicate-msg">A document with this content was previously processed.</span>
+          <div class="alert-actions-row">
+            <button type="button" class="btn btn-secondary btn-xs" id="dup-view-existing-btn">View Existing Document</button>
+            <button type="button" class="btn btn-ghost btn-xs" id="dup-process-anyway-btn">Process Anyway</button>
           </div>
         </div>
       </div>
@@ -107,8 +193,9 @@
       <!-- Try A Sample Section -->
       <div class="samples-section">
         <div class="samples-header">
-          <span class="samples-tag">No image on hand?</span>
+          <span class="samples-tag">Instant Verification Demo</span>
           <h3 class="samples-title">Try one of our curated samples</h3>
+          <p class="samples-sub">Test field confidence scoring, Verification Agent checks, and calendar/spreadsheet export.</p>
         </div>
 
         <div class="samples-grid">
@@ -128,7 +215,7 @@
                   <line x1="8" y1="2" x2="8" y2="6"></line>
                   <line x1="3" y1="10" x2="21" y2="10"></line>
                 </svg>
-                <span>Generates Weekly Recurring .ics</span>
+                <span>Conflict Agent & .ics Calendar</span>
               </div>
             </div>
           </div>
@@ -149,7 +236,7 @@
                   <line x1="8" y1="13" x2="16" y2="13"></line>
                   <line x1="8" y1="17" x2="16" y2="17"></line>
                 </svg>
-                <span>Exports Itemized CSV</span>
+                <span>Arithmetic Audit & Excel/CSV</span>
               </div>
             </div>
           </div>
@@ -168,7 +255,7 @@
                   <circle cx="12" cy="12" r="10"></circle>
                   <polyline points="12 6 12 12 16 14"></polyline>
                 </svg>
-                <span>Adds Event to Calendar (.ics)</span>
+                <span>Date Logic & Q&A Assistant</span>
               </div>
             </div>
           </div>
@@ -177,7 +264,7 @@
     </section>
 
     <!-- ============================================== -->
-    <!-- SCREEN 2: ANIMATED 3-STEP PROCESSING           -->
+    <!-- SCREEN 2: ANIMATED 4-STEP PROCESSING           -->
     <!-- ============================================== -->
     <section id="screen-processing" class="screen-section hidden">
       <div class="processing-card">
@@ -196,7 +283,6 @@
 
         <!-- Stepper Component -->
         <div class="stepper" role="list">
-          <!-- Step 1 -->
           <div class="step-item active" id="step-1" role="listitem">
             <div class="step-marker">
               <span class="step-num">1</span>
@@ -205,14 +291,13 @@
               </svg>
             </div>
             <div class="step-content">
-              <span class="step-title">Reading image</span>
-              <span class="step-desc">Validating format & uploading bytes</span>
+              <span class="step-title">Ingesting Image</span>
+              <span class="step-desc">Validating integrity & size</span>
             </div>
           </div>
 
           <div class="step-divider" id="divider-1"></div>
 
-          <!-- Step 2 -->
           <div class="step-item" id="step-2" role="listitem">
             <div class="step-marker">
               <span class="step-num">2</span>
@@ -221,14 +306,13 @@
               </svg>
             </div>
             <div class="step-content">
-              <span class="step-title">Detecting document type</span>
-              <span class="step-desc">Classifying layout & language</span>
+              <span class="step-title">Vision Extraction</span>
+              <span class="step-desc">Detecting type, text & schema</span>
             </div>
           </div>
 
           <div class="step-divider" id="divider-2"></div>
 
-          <!-- Step 3 -->
           <div class="step-item" id="step-3" role="listitem">
             <div class="step-marker">
               <span class="step-num">3</span>
@@ -237,8 +321,23 @@
               </svg>
             </div>
             <div class="step-content">
-              <span class="step-title">Structuring data</span>
-              <span class="step-desc">Parsing schema & field confidence</span>
+              <span class="step-title">Verification Agent</span>
+              <span class="step-desc">Auditing math, dates & conflicts</span>
+            </div>
+          </div>
+
+          <div class="step-divider" id="divider-3"></div>
+
+          <div class="step-item" id="step-4" role="listitem">
+            <div class="step-marker">
+              <span class="step-num">4</span>
+              <svg class="step-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+            </div>
+            <div class="step-content">
+              <span class="step-title">Ready for Review</span>
+              <span class="step-desc">Version 1 recorded in database</span>
             </div>
           </div>
         </div>
@@ -246,7 +345,7 @@
     </section>
 
     <!-- ============================================== -->
-    <!-- SCREEN 3: RESULTS SPLIT VIEW                   -->
+    <!-- SCREEN 3: VERIFICATION WORKSPACE (SPLIT VIEW)  -->
     <!-- ============================================== -->
     <section id="screen-results" class="screen-section hidden">
       
@@ -258,36 +357,116 @@
               <line x1="19" y1="12" x2="5" y2="12"></line>
               <polyline points="12 19 5 12 12 5"></polyline>
             </svg>
-            <span>Process another document</span>
+            <span>Back to Upload</span>
+          </button>
+
+          <button id="verify-image-btn" class="btn btn-secondary btn-sm" title="Side-by-side inspection highlighting low confidence fields">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+            <span>Verify Against Image</span>
+          </button>
+        </div>
+
+        <div class="toolbar-center">
+          <button id="version-history-btn" class="btn btn-secondary btn-sm" title="View Version History & Changes">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 14 14"></polyline>
+            </svg>
+            <span id="version-badge-text">Version 1 (AI)</span>
+          </button>
+
+          <button id="ask-doc-btn" class="btn btn-secondary btn-sm" title="Ask AI questions about this document">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+            <span>Ask Document</span>
+          </button>
+
+          <button id="summary-btn" class="btn btn-secondary btn-sm" title="Generate structured smart summary">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="8" y1="6" x2="21" y2="6"></line>
+              <line x1="8" y1="12" x2="21" y2="12"></line>
+              <line x1="8" y1="18" x2="21" y2="18"></line>
+              <line x1="3" y1="6" x2="3.01" y2="6"></line>
+              <line x1="3" y1="12" x2="3.01" y2="12"></line>
+              <line x1="3" y1="18" x2="3.01" y2="18"></line>
+            </svg>
+            <span>Smart Summary</span>
+          </button>
+
+          <button id="translate-btn" class="btn btn-secondary btn-sm" title="Translate document text">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="2" y1="12" x2="22" y2="12"></line>
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+            </svg>
+            <span>Translate</span>
           </button>
         </div>
 
         <div class="toolbar-right">
-          <button id="toggle-json-btn" class="btn btn-secondary btn-sm" aria-expanded="false" aria-controls="raw-json-panel">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="16 18 22 12 16 6"></polyline>
-              <polyline points="8 6 2 12 8 18"></polyline>
+          <!-- Verify & Save Button (Primary Human-in-the-Loop action) -->
+          <button id="verify-save-btn" class="btn btn-success btn-sm" title="Approve and mark document as Verified">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="20 6 9 17 4 12"></polyline>
             </svg>
-            <span id="toggle-json-text">View Raw JSON</span>
-          </button>
-          
-          <button id="copy-json-btn" class="btn btn-secondary btn-sm" title="Copy structured JSON to clipboard">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-            </svg>
-            <span>Copy JSON</span>
+            <span>Verify & Save</span>
           </button>
 
-          <!-- Primary Export Action Button (Dynamically configured) -->
-          <button id="primary-action-btn" class="btn btn-primary btn-sm">
-            <svg id="primary-action-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-              <polyline points="7 10 12 15 17 10"></polyline>
-              <line x1="12" y1="15" x2="12" y2="3"></line>
-            </svg>
-            <span id="primary-action-text">Export</span>
-          </button>
+          <!-- Export Center Dropdown -->
+          <div class="dropdown-wrapper">
+            <button id="export-center-btn" class="btn btn-primary btn-sm">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              <span>Export</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </button>
+            <div class="dropdown-menu hidden" id="export-dropdown-menu">
+              <div class="dropdown-header">Export Options (Defaults to Verified Data)</div>
+              <button class="dropdown-item" id="export-opt-ics">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                <span>Calendar (.ics)</span>
+              </button>
+              <button class="dropdown-item" id="export-opt-excel">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
+                <span>Excel Spreadsheet (.xlsx)</span>
+              </button>
+              <button class="dropdown-item" id="export-opt-csv">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                <span>CSV Table (.csv)</span>
+              </button>
+              <button class="dropdown-item" id="export-opt-json">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                <span>Structured JSON (.json)</span>
+              </button>
+              <button class="dropdown-item" id="export-opt-print">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                <span>Print / PDF Document</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sensitive Data Warning Banner (If detected) -->
+      <div id="sensitive-data-banner" class="alert alert-warning hidden" role="alert">
+        <div class="alert-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+        </div>
+        <div class="alert-content">
+          <span class="alert-title">Sensitive Information Detected</span>
+          <span class="alert-message" id="sensitive-data-msg">Personal data detected. Exercise caution when sharing or exporting.</span>
         </div>
       </div>
 
@@ -295,7 +474,10 @@
       <div id="raw-json-panel" class="raw-json-container hidden">
         <div class="raw-json-header">
           <span class="raw-json-label">Current Structured Document Payload</span>
-          <span class="raw-json-hint">(Updates live as you edit fields below)</span>
+          <div class="raw-json-actions">
+            <button class="btn btn-secondary btn-xs" id="copy-json-btn">Copy JSON</button>
+            <button class="btn btn-ghost btn-xs" id="close-raw-json-btn">Close</button>
+          </div>
         </div>
         <pre id="raw-json-content" class="raw-json-code"><code></code></pre>
       </div>
@@ -312,7 +494,7 @@
                 <span id="preview-filename" class="preview-subtitle">document.png</span>
               </div>
               <div class="zoom-controls" role="toolbar" aria-label="Image Zoom Controls">
-                <button id="zoom-out-btn" class="btn-icon" title="Zoom Out (Alt -)" aria-label="Zoom out">
+                <button id="zoom-out-btn" class="btn-icon" title="Zoom Out" aria-label="Zoom out">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <circle cx="11" cy="11" r="8"></circle>
                     <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
@@ -320,7 +502,7 @@
                   </svg>
                 </button>
                 <span id="zoom-level-text" class="zoom-label">100%</span>
-                <button id="zoom-in-btn" class="btn-icon" title="Zoom In (Alt +)" aria-label="Zoom in">
+                <button id="zoom-in-btn" class="btn-icon" title="Zoom In" aria-label="Zoom in">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <circle cx="11" cy="11" r="8"></circle>
                     <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
@@ -342,12 +524,12 @@
             </div>
             
             <div class="preview-footer">
-              <span class="footer-tip">Tip: Scroll or use buttons above to zoom & pan the document for easy cross-checking.</span>
+              <span class="footer-tip">Zoom or scroll to inspect original text against the extracted fields on the right.</span>
             </div>
           </div>
         </div>
 
-        <!-- RIGHT COLUMN: Metadata Badges, Stats & Editable Fields -->
+        <!-- RIGHT COLUMN: Verification Status, Report Card & Editable Fields -->
         <div class="editor-column">
           <div class="editor-card">
             
@@ -356,24 +538,49 @@
               <div class="badge-group">
                 <span class="badge" id="badge-doc-type">Timetable</span>
                 <span class="badge badge-outline" id="badge-language">English</span>
+                <span class="status-pill status-pill-verified" id="badge-verification-status">🟢 Verified</span>
               </div>
-              <div class="confidence-badge" id="badge-confidence" title="Overall extraction confidence score">
+              
+              <div class="confidence-badge" id="badge-confidence" title="AI Confidence Score">
                 <span class="confidence-dot" id="badge-confidence-dot"></span>
-                <span class="confidence-text" id="badge-confidence-text">98% Confidence</span>
+                <span class="confidence-text" id="badge-confidence-text">AI Confidence: 98%</span>
+              </div>
+            </div>
+
+            <!-- Verification Agent Report Card -->
+            <div class="verification-report-card" id="verification-card">
+              <div class="vcard-header">
+                <div class="vcard-title-group">
+                  <div class="vcard-icon-wrap" id="vcard-status-icon">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                  </div>
+                  <div>
+                    <h4 class="vcard-title" id="vcard-title">Verification Agent Audit</h4>
+                    <p class="vcard-subtitle" id="vcard-summary">Checking internal consistency, mathematical logic, and timetable conflicts.</p>
+                  </div>
+                </div>
+                <div class="vcard-score-wrap">
+                  <span class="vcard-score" id="vcard-score-value">95</span>
+                  <span class="vcard-score-label">/100 Audit Score</span>
+                </div>
+              </div>
+
+              <!-- Collapsible Checks and Issues List -->
+              <div class="vcard-body" id="vcard-body">
+                <div class="vcard-issues-list" id="vcard-issues-list"></div>
+                <div class="vcard-passed-list" id="vcard-passed-list"></div>
               </div>
             </div>
 
             <!-- Contextual Summary Statistics Cards -->
-            <div class="summary-cards-grid" id="summary-cards">
-              <!-- Dynamically populated based on doc_type -->
-            </div>
+            <div class="summary-cards-grid" id="summary-cards"></div>
 
             <!-- Interactive Editable Data Container -->
             <div class="editor-body">
               <div class="editor-section-header">
                 <div>
-                  <h3 class="editor-section-title">Extracted Data Fields</h3>
-                  <p class="editor-section-desc">Review and modify the extracted values. All exports use your edited data.</p>
+                  <h3 class="editor-section-title">Structured Data Fields</h3>
+                  <p class="editor-section-desc">Edit fields directly to correct AI outputs. Changes are preserved in Version History.</p>
                 </div>
                 <div class="confidence-legend">
                   <span class="legend-item"><span class="dot dot-high"></span> High (&gt;85%)</span>
@@ -383,8 +590,30 @@
               </div>
 
               <!-- Main Dynamic Form / Table Area -->
-              <div id="dynamic-form-area" class="dynamic-form-area">
-                <!-- Dynamically rendered by app.js based on doc_type -->
+              <div id="dynamic-form-area" class="dynamic-form-area"></div>
+
+              <!-- Extraction Feedback Card -->
+              <div class="feedback-card" id="feedback-card">
+                <div class="feedback-question">
+                  <span>Was this extraction correct?</span>
+                  <div class="feedback-buttons">
+                    <button type="button" class="btn btn-ghost btn-xs feedback-btn" id="fb-yes-btn" title="Yes, extraction was accurate">👍 Yes</button>
+                    <button type="button" class="btn btn-ghost btn-xs feedback-btn" id="fb-no-btn" title="No, there were errors">👎 No</button>
+                  </div>
+                </div>
+                <div class="feedback-reasons hidden" id="feedback-reasons">
+                  <span class="reasons-label">What was wrong?</span>
+                  <div class="reasons-chips">
+                    <label class="reason-chip"><input type="checkbox" value="Date"> Date</label>
+                    <label class="reason-chip"><input type="checkbox" value="Time"> Time</label>
+                    <label class="reason-chip"><input type="checkbox" value="Subject"> Subject</label>
+                    <label class="reason-chip"><input type="checkbox" value="Room"> Room</label>
+                    <label class="reason-chip"><input type="checkbox" value="Amount"> Amount</label>
+                    <label class="reason-chip"><input type="checkbox" value="Other"> Other</label>
+                  </div>
+                  <button type="button" class="btn btn-secondary btn-xs" id="fb-submit-btn">Submit Feedback</button>
+                </div>
+                <div class="feedback-thanks hidden" id="feedback-thanks">Thank you for your feedback! It helps improve the verification system.</div>
               </div>
             </div>
 
@@ -392,16 +621,20 @@
             <div class="action-panel" id="action-panel">
               <div class="action-panel-info">
                 <span class="action-panel-title" id="action-panel-heading">Ready to sync?</span>
-                <span class="action-panel-desc" id="action-panel-subheading">Export your structured data directly into calendar or spreadsheet apps.</span>
+                <span class="action-panel-desc" id="action-panel-subheading">Export your verified data directly into calendar or spreadsheet apps.</span>
               </div>
               <div class="action-panel-buttons">
+                <button id="bottom-verify-btn" class="btn btn-success btn-lg">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  <span>Verify & Save</span>
+                </button>
                 <button id="bottom-action-btn" class="btn btn-primary btn-lg">
                   <svg id="bottom-action-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                     <polyline points="7 10 12 15 17 10"></polyline>
                     <line x1="12" y1="15" x2="12" y2="3"></line>
                   </svg>
-                  <span id="bottom-action-text">Add to Calendar (.ics)</span>
+                  <span id="bottom-action-text">Export</span>
                 </button>
               </div>
             </div>
@@ -412,7 +645,360 @@
       </div>
     </section>
 
+    <!-- ============================================== -->
+    <!-- SCREEN 4: PERSISTENT DOCUMENT HISTORY          -->
+    <!-- ============================================== -->
+    <section id="screen-history" class="screen-section hidden">
+      <div class="history-hero">
+        <div class="history-title-wrap">
+          <h2 class="history-title">Document History & Audit Trail</h2>
+          <p class="history-desc">Search, filter, compare versions, and re-open all documents processed by DocSnap.</p>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" id="history-upload-btn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          <span>Upload Document</span>
+        </button>
+      </div>
+
+      <!-- Search & Filters Toolbar -->
+      <div class="history-filters-bar">
+        <div class="search-input-wrap">
+          <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input type="text" id="history-search-input" class="search-input" placeholder="Search documents by subject, store, headline, or room...">
+        </div>
+
+        <div class="filters-row">
+          <select id="filter-doc-type" class="form-select filter-select">
+            <option value="all">All Document Types</option>
+            <option value="timetable">Timetables</option>
+            <option value="receipt">Receipts</option>
+            <option value="notice">Notices</option>
+            <option value="poster">Posters</option>
+            <option value="other">Other</option>
+          </select>
+
+          <select id="filter-status" class="form-select filter-select">
+            <option value="all">All Statuses</option>
+            <option value="verified">🟢 Verified</option>
+            <option value="needs_review">🟡 Needs Review</option>
+            <option value="warning">🔴 Warning</option>
+            <option value="ai_generated">🔵 AI Generated</option>
+          </select>
+
+          <select id="filter-language" class="form-select filter-select">
+            <option value="all">All Languages</option>
+            <option value="English">English</option>
+            <option value="Hindi">Hindi (हिंदी)</option>
+            <option value="Gujarati">Gujarati (ગુજરાતી)</option>
+          </select>
+
+          <select id="filter-sort" class="form-select filter-select">
+            <option value="newest">Sort: Newest First</option>
+            <option value="oldest">Sort: Oldest First</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- History Documents Grid -->
+      <div class="history-grid" id="history-items-container">
+        <!-- Rendered dynamically by app.js -->
+      </div>
+
+      <!-- Empty State -->
+      <div class="empty-state hidden" id="history-empty-state">
+        <div class="empty-icon-wrap">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="16" y1="2" x2="16" y2="6"></line>
+            <line x1="8" y1="2" x2="8" y2="6"></line>
+            <line x1="3" y1="10" x2="21" y2="10"></line>
+          </svg>
+        </div>
+        <h3 class="empty-title">No documents found</h3>
+        <p class="empty-desc">No matching documents found in history. Try adjusting your search query or upload a screenshot to get started.</p>
+        <button type="button" class="btn btn-secondary btn-sm" id="empty-upload-btn">Upload a Screenshot</button>
+      </div>
+    </section>
+
+    <!-- ============================================== -->
+    <!-- SCREEN 5: ANALYTICS DASHBOARD                  -->
+    <!-- ============================================== -->
+    <section id="screen-dashboard" class="screen-section hidden">
+      <div class="dashboard-hero">
+        <h2 class="dashboard-title">System Analytics & Verification Metrics</h2>
+        <p class="dashboard-desc">Real-time statistics on document throughput, verification rates, and AI confidence calibration.</p>
+      </div>
+
+      <!-- Metrics Cards Grid -->
+      <div class="metrics-grid" id="dashboard-metrics-grid">
+        <div class="metric-card">
+          <span class="metric-label">Documents Processed</span>
+          <span class="metric-value" id="metric-total-docs">0</span>
+          <span class="metric-sub">Total vision extractions</span>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-label">Verified by Humans</span>
+          <span class="metric-value text-success" id="metric-verified-docs">0</span>
+          <span class="metric-sub" id="metric-verified-sub">0% Verification Rate</span>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-label">User Corrected</span>
+          <span class="metric-value text-primary" id="metric-corrected-docs">0</span>
+          <span class="metric-sub">Edited before verification</span>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-label">Needs Review</span>
+          <span class="metric-value text-warning" id="metric-review-docs">0</span>
+          <span class="metric-sub">Flagged by Verification Agent</span>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-label">Average AI Confidence</span>
+          <span class="metric-value" id="metric-avg-conf">92%</span>
+          <span class="metric-sub">Calibrated confidence score</span>
+        </div>
+      </div>
+
+      <!-- Distribution Charts / Lists -->
+      <div class="dashboard-charts-row">
+        <div class="chart-card">
+          <h3 class="chart-title">Document Type Breakdown</h3>
+          <div class="type-distribution-list" id="type-distribution-list">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <h3 class="chart-title">Workflow Architecture</h3>
+          <div class="workflow-steps-mini">
+            <div class="mini-step">
+              <span class="mini-step-num">1</span>
+              <span>Vision OCR & Classification</span>
+            </div>
+            <div class="mini-step">
+              <span class="mini-step-num">2</span>
+              <span>Verification Agent Deterministic Audit</span>
+            </div>
+            <div class="mini-step">
+              <span class="mini-step-num">3</span>
+              <span>Human Correction & Approval</span>
+            </div>
+            <div class="mini-step">
+              <span class="mini-step-num">4</span>
+              <span>Immutable Version Snapshot & Export</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================== -->
+    <!-- SCREEN 6: HOW IT WORKS EXPLAINER               -->
+    <!-- ============================================== -->
+    <section id="screen-how-it-works" class="screen-section hidden">
+      <div class="explainer-hero">
+        <h2 class="explainer-title">How DocSnap Works</h2>
+        <p class="explainer-desc">
+          "AI extracts. AI checks. Humans verify. The system remembers."<br>
+          We believe AI should not be blindly trusted. Here is how DocSnap provides a complete verification and audit lifecycle.
+        </p>
+      </div>
+
+      <div class="pipeline-container">
+        <div class="pipeline-card">
+          <div class="pipeline-icon">📸</div>
+          <h3 class="pipeline-heading">1. Ingestion</h3>
+          <p class="pipeline-text">Drag, drop, paste (Ctrl+V), or select multiple screenshots. Supports Timetables, Receipts, Notices, and Posters in English, Hindi, and Gujarati.</p>
+        </div>
+
+        <div class="pipeline-card">
+          <div class="pipeline-icon">🤖</div>
+          <h3 class="pipeline-heading">2. Vision AI</h3>
+          <p class="pipeline-text">Google Gemini Flash performs one-shot OCR, document classification, schema mapping, and generates field-level confidence scores.</p>
+        </div>
+
+        <div class="pipeline-card">
+          <div class="pipeline-icon">🛡️</div>
+          <h3 class="pipeline-heading">3. Verification Agent</h3>
+          <p class="pipeline-text">Dedicated deterministic agent audits receipt math (prices &times; qty = total), detects overlapping classes on timetables, and checks notice deadlines.</p>
+        </div>
+
+        <div class="pipeline-card">
+          <div class="pipeline-icon">👤</div>
+          <h3 class="pipeline-heading">4. Human Verification</h3>
+          <p class="pipeline-text">Side-by-side split screen allows users to cross-check image pixels against extracted data. Low confidence fields are emphasized with warning badges.</p>
+        </div>
+
+        <div class="pipeline-card">
+          <div class="pipeline-icon">🕘</div>
+          <h3 class="pipeline-heading">5. Version History</h3>
+          <p class="pipeline-text">Original AI data is never overwritten. The system records Version 1 (AI), Version 2 (User Edited), and Version 3 (Verified) with full diff tracking.</p>
+        </div>
+
+        <div class="pipeline-card">
+          <div class="pipeline-icon">⚡</div>
+          <h3 class="pipeline-heading">6. Smart Actions</h3>
+          <p class="pipeline-text">Exports verified data into recurring weekly Google/Apple Calendar events (.ics), Excel spreadsheets (.xlsx), itemized CSVs, and interactive Q&A assistant.</p>
+        </div>
+      </div>
+    </section>
+
   </main>
+
+  <!-- ============================================== -->
+  <!-- MODALS & DRAWERS                               -->
+  <!-- ============================================== -->
+
+  <!-- Modal 1: Version History & Diff Comparison -->
+  <div class="modal-overlay hidden" id="modal-versions">
+    <div class="modal-box modal-lg" role="dialog" aria-modal="true" aria-labelledby="modal-versions-title">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <h3 class="modal-title" id="modal-versions-title">Version History & Diff Comparison</h3>
+          <span class="modal-subtitle">Track evolution from AI generation to verified final data.</span>
+        </div>
+        <button type="button" class="modal-close-btn" id="modal-versions-close">&times;</button>
+      </div>
+      <div class="modal-body" id="modal-versions-body">
+        <div class="versions-timeline" id="versions-timeline"></div>
+        <div class="diff-viewer" id="diff-viewer">
+          <h4 class="diff-title">Comparison: AI Extracted vs Final Verified</h4>
+          <div class="diff-table-wrap" id="diff-table-wrap"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary btn-sm" id="modal-versions-dismiss">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 2: Ask Your Document Assistant -->
+  <div class="modal-overlay hidden" id="modal-ask">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modal-ask-title">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <h3 class="modal-title" id="modal-ask-title">Ask Your Document</h3>
+          <span class="modal-subtitle">Grounded AI answers strictly from this document's contents.</span>
+        </div>
+        <button type="button" class="modal-close-btn" id="modal-ask-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="ask-suggestions" id="ask-suggestions">
+          <span class="suggestions-label">Suggested Questions:</span>
+          <div class="chips-row" id="ask-chips-row"></div>
+        </div>
+
+        <div class="ask-chat-history" id="ask-chat-history">
+          <div class="chat-msg assistant">
+            <span>Hi! Ask me anything about this document, such as exam dates, total costs, faculty names, or venue locations.</span>
+          </div>
+        </div>
+
+        <div class="ask-input-row">
+          <input type="text" id="ask-input" class="form-input" placeholder="Type your question...">
+          <button type="button" class="btn btn-primary btn-sm" id="ask-submit-btn">Ask</button>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <span class="footer-tip">The assistant never hallucinates: answers only from extracted document text.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 3: Smart Summary -->
+  <div class="modal-overlay hidden" id="modal-summary">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modal-summary-title">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <h3 class="modal-title" id="modal-summary-title">Document Smart Summary</h3>
+          <span class="modal-subtitle">Key highlights, venues, timings, and deadlines.</span>
+        </div>
+        <button type="button" class="modal-close-btn" id="modal-summary-close">&times;</button>
+      </div>
+      <div class="modal-body" id="modal-summary-body">
+        <div class="summary-loading" id="summary-loading">
+          <div class="spinner-ring sm"></div>
+          <span>Generating structured executive summary...</span>
+        </div>
+        <div class="summary-content hidden" id="summary-content">
+          <div class="summary-key-points">
+            <h4 class="summary-section-heading">📌 Important Points</h4>
+            <ul id="summary-points-list" class="summary-bullets"></ul>
+          </div>
+          <div class="summary-meta-grid">
+            <div class="summary-meta-item">
+              <span class="meta-label">📅 Date</span>
+              <span class="meta-val" id="sum-date">N/A</span>
+            </div>
+            <div class="summary-meta-item">
+              <span class="meta-label">⏰ Time</span>
+              <span class="meta-val" id="sum-time">N/A</span>
+            </div>
+            <div class="summary-meta-item">
+              <span class="meta-label">📍 Venue / Merchant</span>
+              <span class="meta-val" id="sum-venue">N/A</span>
+            </div>
+            <div class="summary-meta-item">
+              <span class="meta-label">⚠️ Deadline / Total</span>
+              <span class="meta-val" id="sum-deadline">N/A</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary btn-sm" id="summary-copy-btn">Copy Summary</button>
+        <button type="button" class="btn btn-primary btn-sm" id="summary-close-btn">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 4: Translation Side-by-Side -->
+  <div class="modal-overlay hidden" id="modal-translate">
+    <div class="modal-box modal-lg" role="dialog" aria-modal="true" aria-labelledby="modal-translate-title">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <h3 class="modal-title" id="modal-translate-title">Document Translation</h3>
+          <span class="modal-subtitle">Translates fields while keeping the original extracted text untouched.</span>
+        </div>
+        <button type="button" class="modal-close-btn" id="modal-translate-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="translate-controls-bar">
+          <label for="translate-lang-select" class="form-label inline">Translate to:</label>
+          <select id="translate-lang-select" class="form-select inline-select">
+            <option value="English">English</option>
+            <option value="Hindi">Hindi (हिंदी)</option>
+            <option value="Gujarati">Gujarati (ગુજરાતી)</option>
+            <option value="Marathi">Marathi (मराठी)</option>
+            <option value="Bengali">Bengali (বাংলা)</option>
+            <option value="Tamil">Tamil (தமிழ்)</option>
+          </select>
+          <button type="button" class="btn btn-primary btn-sm" id="translate-submit-btn">Translate</button>
+        </div>
+
+        <div class="translation-side-by-side" id="translation-side-by-side">
+          <div class="trans-col">
+            <span class="trans-col-title">Original Text (<span id="trans-orig-lang">Original</span>)</span>
+            <pre class="trans-content" id="trans-orig-content"><code></code></pre>
+          </div>
+          <div class="trans-col">
+            <span class="trans-col-title">Translation (<span id="trans-target-lang">English</span>)</span>
+            <pre class="trans-content" id="trans-result-content"><code>Click Translate to view translation...</code></pre>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <span class="footer-tip">Original extraction is permanently preserved in history.</span>
+        <button type="button" class="btn btn-secondary btn-sm" id="modal-translate-dismiss">Close</button>
+      </div>
+    </div>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>
