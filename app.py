@@ -442,7 +442,22 @@ def generate_docsnap_ics(doc_type, data):
 # ROUTES
 # ==============================================================================
 
+@app.route('/debug-vercel')
+@app.route('/api/index.py/debug-vercel')
+def debug_vercel():
+    return jsonify({
+        "path": request.path,
+        "full_path": request.full_path,
+        "environ_path_info": request.environ.get('PATH_INFO'),
+        "environ_request_uri": request.environ.get('REQUEST_URI'),
+        "environ_raw_uri": request.environ.get('RAW_URI'),
+        "headers": {k: v for k, v in request.headers.items()}
+    })
+
 @app.route('/')
+@app.route('/api/index.py')
+@app.route('/api/index')
+@app.route('/api')
 def index():
     """Serves the DocSnap web interface with retry status polling and dynamic model badge update."""
     rendered = render_template('index.html')
