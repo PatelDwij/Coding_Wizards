@@ -443,16 +443,7 @@ def generate_docsnap_ics(doc_type, data):
 # ==============================================================================
 
 @app.route('/')
-@app.route('/api/index.py')
 def index():
-    if 'debug' in request.args or 'debug' in request.path:
-        return jsonify({
-            "path": request.path,
-            "url": request.url,
-            "args": dict(request.args),
-            "headers": {k: v for k, v in request.headers.items()},
-            "environ_keys": {k: str(v) for k, v in request.environ.items() if any(w in k for w in ['PATH', 'URI', 'ROUTE', 'VERCEL', 'MATCH'])}
-        })
     """Serves the DocSnap web interface with retry status polling and dynamic model badge update."""
     rendered = render_template('index.html')
     status_script = """
