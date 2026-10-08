@@ -21,7 +21,13 @@ import verification
 import sensitive_data
 import ai_services
 
-app = Flask(__name__)
+BASE_DIR = Path(__file__).resolve().parent
+app = Flask(
+    __name__,
+    template_folder=str(BASE_DIR / 'templates'),
+    static_folder=str(BASE_DIR / 'static'),
+    static_url_path='/static'
+)
 app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # 5MB max upload
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}

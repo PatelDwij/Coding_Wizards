@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import json
 import uuid
@@ -5,13 +6,23 @@ import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-DB_PATH = Path(__file__).parent / 'docsnap.db'
+# On Vercel / serverless (read-only filesystem), store database in /tmp
+if os.environ.get('VERCEL') or not os.access(str(Path(__file__).parent), os.W_OK):
+    DB_PATH = Path('/tmp') / 'docsnap.db'
+else:
+    DB_PATH = Path(__file__).parent / 'docsnap.db'
 
 def get_db_connection():
     """Returns a SQLite connection with row factory enabled."""
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        return conn
+    except Exception:
+        fallback = Path('/tmp') / 'docsnap.db'
+        conn = sqlite3.connect(str(fallback))
+        conn.row_factory = sqlite3.Row
+        return conn
 
 def init_db():
     """Initializes the SQLite database tables if they do not exist."""
@@ -687,4 +698,7 @@ def seed_default_documents_if_empty():
     )
 
 # Auto-initialize on module import
-init_db()
+try:
+    init_db()
+except Exception:
+    pass
