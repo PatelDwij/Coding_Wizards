@@ -443,6 +443,7 @@ def generate_docsnap_ics(doc_type, data):
 # ==============================================================================
 
 @app.route('/')
+@app.route('/api/index.py')
 def index():
     """Serves the DocSnap web interface with retry status polling and dynamic model badge update."""
     rendered = render_template('index.html')
