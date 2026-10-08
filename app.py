@@ -529,9 +529,13 @@ def extract_status():
     global CURRENT_RETRY_STATUS
     return jsonify({"status": CURRENT_RETRY_STATUS})
 
+@app.route('/static/<path:filename>')
+def serve_static_file(filename):
+    return send_from_directory(str(BASE_DIR / 'static'), filename)
+
 @app.route('/static/samples/<filename>')
 def serve_sample(filename):
-    return send_from_directory('static/samples', filename)
+    return send_from_directory(str(BASE_DIR / 'static' / 'samples'), filename)
 
 @app.route('/extract', methods=['POST'])
 def extract_document():
